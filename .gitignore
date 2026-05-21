@@ -1,0 +1,16 @@
+### Deno ###
+/.idea/
+/.vscode/
+
+/node_modules
+
+.env
+*.orig
+*.pyc
+*.swp
+
+# Cache directory
+cache/
+
+# dumped casatramway.ma webpack files
+mapped@www.casatramway.ma/

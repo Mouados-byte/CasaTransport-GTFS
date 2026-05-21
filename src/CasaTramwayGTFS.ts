@@ -1,0 +1,858 @@
+import Line, { ILineWithStopTimes } from "./types/line.ts";
+import {
+    GtfsData, StopsByLine, StopPoint,
+    CalendarPerimeter, LineInfos, DeparturesOptions,
+    ComputedTime, Destination, DiscoveryResponse, GtfsExportBundle,
+    StopsByLineCategory, LineNumber, TStopDepartures,
+    GtfsProtoData, IScheduleStopTime,
+    RoutePlannerResponse, LineName
+} from "./types/types.ts";
+import {
+    CASATRAMWAY_GTFS_URI, CASATRAMWAY_ROUTE_PLANNER_URI,
+    GTFS_EXPORT_FILES, LINE_FREQUENCIES
+} from "./constants.ts";
+
+// @deno-types="./proto/orchestraProto.d.ts"
+import { proto } from "./proto/orchestraProto.js";
+import {
+    ProtoClassConstructor, ProtoClasses,
+    ProtoStopFromStopPoint, WebpackStopPoint
+} from "./proto/types.ts";
+import { StopPointFromWebpack } from "./types/stop.ts";
+import { getHolidaysSundaysCache, getRoutePlannerSessionCookie, moveElement, toGtfsDate } from "./utils/utils.ts";
+
+export default class CasaTramwayGTFS {
+    private static gtfsHolidays: string[];
+
+    constructor(
+        private readonly gtfsUri: string = CASATRAMWAY_GTFS_URI,
+        private readonly routePlannerUri: string = CASATRAMWAY_ROUTE_PLANNER_URI,
+        private readonly encodeUriPath: boolean = false
+    ) {}
+
+    private makeApiUrl(pathAndQuery: string): string {
+        const normalized = pathAndQuery.startsWith("/")
+            ? pathAndQuery
+            : `/${pathAndQuery}`;
+        const path = this.encodeUriPath
+            ? encodeURIComponent(normalized)
+            : normalized;
+        return `${this.gtfsUri}${path}`;
+    }
+
+    private async fetchJson<T>(
+        pathAndQuery: string,
+        ctor?: new (json: object) => T,
+        reqParams?: RequestInit,
+        useRoutePlannerURI?: boolean
+    ): Promise<T> {
+        const url = useRoutePlannerURI ? pathAndQuery : this.makeApiUrl(pathAndQuery);
+        const response = await fetch(url, reqParams);
+        let responseJson: object | false;
+        // all /phtv/get endpoints return 200 with body "false" if the request is invalid
+        if (!response.ok || (responseJson = await response.json()) === false) {
+            throw new Error(
+               `Failed to fetch ${pathAndQuery} (${response.status} ${response.statusText}) from ${url}`
+            );
+        }
+        return ctor ? new ctor(responseJson) : responseJson as T;
+    }
+
+    private async fetchProto<T extends ProtoClassConstructor<ProtoClasses>>(
+        pathAndQuery: string,
+        proto: T
+    ): Promise<InstanceType<T>> {
+        const url = this.makeApiUrl(pathAndQuery);
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(
+                `Failed to fetch ${pathAndQuery} (${response.status} ${response.statusText}) from ${url}`
+            );
+        }
+        const buffer = await response.arrayBuffer();
+        return proto.decode(new Uint8Array(buffer)) as InstanceType<T>;
+    }
+
+    private async ensureHolidaysCache() {
+        if (!CasaTramwayGTFS.gtfsHolidays) {
+            const holidays = await getHolidaysSundaysCache();
+
+            CasaTramwayGTFS.gtfsHolidays = holidays;
+        }
+    }
+
+    private numberFrom(value: unknown): number | null {
+        if (value === undefined || value === null || value === "") {
+            return null;
+        }
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    private unwrapItems<T>(payload: DiscoveryResponse<T>, ctor?: new (obj: object) => T): T[] {
+        if (!payload || !payload?.items) {
+            return [];
+        }
+        if (Array.isArray(payload.items)) {
+            return payload.items.map((item) => (ctor ? new ctor(item as object) : item));
+        }
+        return Object.values(payload.items) as T[];
+    }
+
+
+    // Equivalent of initDataProto.ts (JSON discovery endpoint fallback)
+    async getInitData(
+        _area?: string,
+        onlyPhysicals?: boolean,
+        network: string = ""
+    ): Promise<GtfsData> {
+        const linesPath = `/lines-discovery?reseau=${network}&max=1000`;
+        let stopsPath = `/stoppoints-discovery?reseau=${network}&max=10000`;
+        if (onlyPhysicals) {
+            stopsPath += "&onlyphysicals=1";
+        }
+
+        const [linesResponse, stopsResponse] = await Promise.all([
+            this.fetchJson<DiscoveryResponse<Line>>(linesPath),
+            this.fetchJson<DiscoveryResponse<StopPoint<false>>>(stopsPath)
+        ]);
+
+        const linesRaw = this.unwrapItems(linesResponse, Line);
+        const stopsRaw = this.unwrapItems(stopsResponse);
+
+        const lines: { [key: string]: Line } = Object.fromEntries(
+            linesRaw.map(line => [line.lineRef, line])
+        );
+
+        const stops: { [key: string]: StopPoint<false> } = Object.fromEntries(
+            stopsRaw.map(stop => [stop.StopPointRef, stop])
+        );
+        // for (const rawStop of stopsRaw) {
+        //     const ref = rawStop.StopPointRef;
+        //     if (!ref) {
+        //         continue;
+        //     }
+
+        //     const location = rawStop.Location;
+        //     const stop: WebpackStopPoint = {
+        //         name: rawStop.StopName.value,
+        //         x: this.numberFrom(location.Latitude) ?? 0,
+        //         y: this.numberFrom(location.Longitude) ?? 0,
+        //         ref,
+        //         city: rawStop.StopCity,
+        //         lines: [],
+        //         dests: [],
+        //         isCommercial: false,
+        //         spoints: [],
+        //     };
+
+        //     const stopLines = rawStop.Lines;
+        //     for (const lineRaw of Object.values(stopLines)) {
+        //         const service = lineRaw.LineRef;
+        //         if (!service) {
+        //             continue;
+        //         }
+        //         stop.lines!.push(service);
+        //         const dests = lineRaw.Dests;
+        //         for (const destRaw of dests) {
+        //             stop.dests!.push({
+        //                 id: `${service}_${ref}_${destRaw.direction}`,
+        //                 name: destRaw.lib,
+        //                 service,
+        //             });
+        //         }
+        //     }
+
+        //     stops[ref] = StopPointFromWebpack<false>(stop);
+        // }
+
+        return { lines, stops };
+    }
+
+    // Equivalent of initDataProto.ts (protobuf discovery endpoints)
+    async getInitDataProto(
+        _area?: string,
+        onlyPhysicals?: boolean,
+        network: string = ""
+    ): Promise<GtfsProtoData> {
+        const linesPath = `/proto/lines-discovery-all?reseau=${network}`
+        let stopsPath = `/proto/stoppoints-discovery-all?reseau=${network}`;
+        if (onlyPhysicals) {
+            stopsPath += "&onlyphysicals=1";
+        }
+
+        const [linesResponse, stopsResponse] = await Promise.all([
+            this.fetchProto(linesPath, proto.LinesApiResponse),
+            this.fetchProto(stopsPath, proto.StopsApiResponse)
+        ]);
+
+        const lines: GtfsProtoData["lines"] = Object.fromEntries(
+            linesResponse.lines.map(line => [line.ref, new proto.Line(line)])
+        );
+
+        const stops: GtfsProtoData["stops"] = Object.fromEntries(
+            stopsResponse.stops.map(stop => [stop.ref, new proto.Stop(stop)])
+        );
+
+        return { lines, stops };
+    }
+
+    // Equivalent of getLineStops.ts
+    async getLineStops(
+        line: string,
+        direction: 0 | 1 | "" = "",
+        onlyPhysicals?: boolean,
+        network: string = ""
+    ): Promise<StopPoint<true>[]> {
+        let path = `/stops-line-discovery?max=1000&reseau=${network}&line=${line}&direction=${direction}`;
+        if (onlyPhysicals !== undefined) {
+            path += `&onlyphysicals=${onlyPhysicals ? 1 : 0}`;
+        }
+
+        const payload = await this.fetchJson<DiscoveryResponse<StopPoint<true>>>(path);
+        if (!payload || !payload.items) {
+            return [];
+        }
+
+        return this.unwrapItems(payload);
+    }
+
+    // Equivalent of getCalendarPerimeter.ts
+    async getCalendarPerimeter(network: string = ""): Promise<CalendarPerimeter> {
+        const payload = await this.fetchJson<
+            { start: string; end: string }
+        >(`/calendar-perimeter?reseau=${network}`);
+
+        if (!payload) {
+            throw new Error(
+                `calendar-perimeter returned no data for network "${network}"`
+            );
+        }
+
+        return {
+            start: payload.start,
+            end: payload.end
+        };
+    }
+
+    // Equivalent of internal getLineInfos(...) in departuresFromGtfs.ts
+    async getLine(lineId: LineName, network: string = ""): Promise<Line | null> {
+        const payload = await this.fetchJson(`/line?reseau=${network}&line=${lineId}`, Line);
+
+        return payload;
+    }
+
+    // Equivalent of getComputedTimes.ts
+    getComputedTimes(schedules: IScheduleStopTime[]): ComputedTime[] {
+        const now = new Date();
+        const computed: ComputedTime[] = [];
+
+        for (const schedule of schedules) {
+            const depTime = schedule.DepTime;
+            const liveTime = schedule.realTime?.time;
+            let date: Date | null = null;
+            let isLive = false;
+
+            if (liveTime) {
+                const [h, m] = String(liveTime).split(":");
+                const current = new Date();
+                current.setHours(Number(h), Number(m), 0, 0);
+                date = current;
+                isLive = true;
+            } else {
+                const parts = depTime.match(/(\d+)/g);
+                if (parts && parts.length >= 5) {
+                    date = new Date(
+                        Number(parts[2]),
+                        Number(parts[1]) - 1,
+                        Number(parts[0]),
+                        Number(parts[3]),
+                        Number(parts[4]),
+                        0,
+                        0
+                    );
+                }
+            }
+
+            if (!date) {
+                continue;
+            }
+
+            const minutes = Math.floor(
+                (date.getTime() - now.getTime()) / (1000 * 60),
+            );
+            const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+
+            computed.push({
+                date,
+                minutes,
+                time,
+                isLive,
+                isCanceled: /* schedule.canceled */ false,
+                tripHeadsign: schedule.tripHeadsign,
+                journeyId: schedule.journeyId
+            });
+        }
+
+        return computed;
+    }
+
+    // Equivalent of gtfsStopDepartures(...) in departuresFromGtfs.ts
+    async getStopDepartures(
+        stop: StopPoint<true | false> | proto.Stop,
+        network: string = "",
+        options: DeparturesOptions = {}
+    ): Promise<TStopDepartures> {
+        const limit = options.limit ?? 2;
+        const ref = stop instanceof proto.Stop ? stop.ref : stop.StopPointRef;
+        let path = `/stop-stoptimes-discovery?nbtimes=${limit}&stop=${ref}&reseau=${network}`;
+
+        if (options.date) {
+            path += `&date=${options.date}`;
+        }
+        if (options.time) {
+            path += `&heure=${options.time}`;
+        }
+        if (options.nbpasttimes !== undefined) {
+            const pastsince = options.pastsince ?? 480;
+            path += `&nbpasttimes=${options.nbpasttimes}&pastsince=${pastsince}`;
+        }
+
+        const payload = await this.fetchJson<
+            DiscoveryResponse<ILineWithStopTimes, `${LineNumber}_${'0' | '1'}`>
+        >(path);
+        if (!payload || !payload.items) {
+            return {};
+        }
+
+        return payload.items as TStopDepartures;
+    }
+
+    // Equivalent of departuresFromGtfs.ts main export
+    // TODO: implement fully
+    async getDeparturesFromGtfs(
+        stopsPoints: proto.Stop[],
+        lines: { [key in LineName]?: Line },
+        network: string = "",
+        options: DeparturesOptions = {}
+    ): Promise<Destination[]> {
+        const expandedStops: proto.Stop[] = [];
+        for (const stop of stopsPoints) {
+            if (stop.spoints && stop.spoints.length > 0) {
+                expandedStops.push(...(stop.spoints.map(ProtoStopFromStopPoint)));
+            } else {
+                expandedStops.push(stop);
+            }
+        }
+
+        const departuresByStop = await Promise.all(
+            expandedStops.map((stop) =>
+                this.getStopDepartures(stop, network, options)
+            )
+        );
+
+        const allDestinations: Destination[] = [];
+        for (const schedules of departuresByStop) {
+            for (const [_, schedule] of Object.entries(schedules)) {
+                const serviceId = schedule.RouteId;
+                const line = lines[serviceId];
+                if (!line) {
+                    continue;
+                }
+                allDestinations.push({
+                    mnemoService: schedule.ShortName,
+                    serviceId,
+                    line,
+                    direction: schedule.Direction,
+                    dirlib: schedule.DirLib,
+                    fromlib: "",
+                    times: this.getComputedTimes(schedule.Schedule)
+                });
+            }
+        }
+
+        const merged: { [key: string]: Destination } = {};
+        for (const destination of allDestinations) {
+            const key = `${destination.serviceId}::${destination.dirlib ?? ""}`;
+            if (!merged[key]) {
+                merged[key] = destination;
+                continue;
+            }
+            merged[key].times.push(...destination.times);
+        }
+
+        return Object.values(merged).sort(
+            (a, b) => (a.line.order ?? 0) - (b.line.order ?? 0)
+        );
+    }
+
+    async getOrderedStops(
+        line: LineName,
+        direction: 0 | 1,
+        onlyPhysicals?: boolean,
+        network: string = ""
+    ): Promise<StopPoint<true>[]> {
+        const lineInfo = await this.getLine(line, network);
+        const lineStops = await this.getLineStops(line, direction, onlyPhysicals, network);
+
+        if (!lineInfo)
+            return [];
+
+        const firstTerminalName = lineInfo!.destinations.find(
+            dest => dest.destinationDir !== direction
+        )!.destinationRef;
+        const lastTerminalName = lineInfo!.destinations.find(
+            dest => dest.destinationDir === direction
+        )!.destinationRef;
+
+        const firstTerminalStop = lineStops.find(s => s.StopName.value === firstTerminalName)!;
+        const lastTerminalStop = lineStops.find(s => s.StopName.value === lastTerminalName)!;
+
+        // 5:00 AM is the earliest departure time for all lines
+        let departureTime: string;
+        {
+            const now = new Date();
+            const targetDate = new Date(Date.UTC(
+                now.getUTCFullYear(),
+                now.getUTCMonth(),
+                now.getUTCDate(),
+                5, 0, 0, 0
+            ));
+
+            departureTime = targetDate.toISOString().replace('Z', "+00:00");
+        }
+
+        const route = await this.fetchJson<RoutePlannerResponse>(this.routePlannerUri, undefined, {
+            method: "POST",
+            body: new URLSearchParams({
+                estimatedResults: "true",
+                "from[id]": `STOPAREA|CASATRAMWAY:${firstTerminalStop.StopPointRef}`,
+                "from[value]": firstTerminalName,
+                "from[latitude]": firstTerminalStop.Location.Latitude,
+                "from[longitude]": firstTerminalStop.Location.Longitude,
+                "to[id]": `STOPAREA|CASATRAMWAY:${lastTerminalStop.StopPointRef}`,
+                "to[value]": lastTerminalName,
+                "to[latitude]": lastTerminalStop.Location.Latitude,
+                "to[longitude]": lastTerminalStop.Location.Longitude,
+                departureDateTime: departureTime,
+                arrivalDateTime: "",
+                "modes[]": "T1".startsWith("T") ? "TRAM" : "BUS",
+                "walk[speed]": "1",
+                "bike[speed]": "1",
+                displayFacilities: "true",
+                scholarLines: "EXCLUDE",
+                accessible: "false",
+                avoidDisruptions: "false",
+                criterion: "FASTEST",
+                currentUrl: "https://www.casatramway.ma/se-deplacer/calcul-ditineraire",
+                widgetContext: "false",
+                layoutMode: "TRANSPORT"
+            }),
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+                "Accept": "text/html, */*; q=0.01",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "X-Requested-With": "XMLHttpRequest",
+                Cookie: `PHPSESSID=${(await getRoutePlannerSessionCookie()).cookie}`
+            },
+            referrer: "https://www.casatramway.ma/"
+        }, true);
+        const routeStopPoints = route.response.tripPlanner.TRANSPORT
+            .groups[0].results.journeys[0].paths.filter(leg => leg.mode !== "WALK")[0].stoppoints;
+
+        const sortedStops = lineStops.sort((a, b) => {
+            const aIdx = routeStopPoints.findIndex(sp => sp.id.split(':')[1] === a.StopPointRef);
+            const bIdx = routeStopPoints.findIndex(sp => sp.id.split(':')[1] === b.StopPointRef);
+
+            // terminals arent included in route planner legs
+            if (aIdx === -1 || bIdx === -1)
+                return -1;
+
+            return aIdx - bIdx;
+        });
+        moveElement(
+            sortedStops, 
+            sortedStops.findIndex(s => s.StopPointRef === firstTerminalStop.StopPointRef),
+            0
+        );
+        moveElement(
+            sortedStops, 
+            sortedStops.findIndex(s => s.StopPointRef === lastTerminalStop.StopPointRef),
+            -1
+        );
+
+        return sortedStops;
+    }
+
+
+    private csvEscape(value: unknown): string {
+        const stringValue =
+            value === undefined || value === null ? "" : String(value);
+        if (
+            stringValue.includes('"') ||
+            stringValue.includes(",") ||
+            stringValue.includes("\n")
+        ) {
+            return `"${stringValue.replaceAll('"', '""')}"`;
+        }
+
+        return stringValue;
+    }
+
+    private toCsv<T extends readonly string[]>(
+        headers: T,
+        rows: Array<{ [K in keyof T]: unknown }>
+    ): string {
+        const lines = [headers.map((header) => this.csvEscape(header)).join(",")];
+        for (const row of rows) {
+            lines.push(row.map(value => this.csvEscape(value)).join(","));
+        }
+        return `${lines.join("\n")}\n`;
+    }
+
+
+    // GTFS data methods
+
+    async getGTFSAgency(network: string = ""): Promise<string> {
+        const { lines } = await this.getInitData(undefined, undefined, network);
+        const agencies = new Map<number, { name: string }>();
+
+        for (const line of Object.values(lines)) {
+            const agencyId = line.agencyRef;
+            const agencyName = line.agencyName;
+            if (!agencies.has(agencyId)) {
+                agencies.set(agencyId, { name: agencyName });
+            }
+        }
+
+        return this.toCsv(
+            [
+                "agency_id",
+                "agency_name",
+                "agency_url",
+                "agency_timezone",
+                "agency_lang"
+            ] as const,
+            Array.from(agencies.entries()).map(([id, agency]) => [
+                id,
+                agency.name,
+                "https://www.casatramway.ma",
+                "Africa/Casablanca",
+                "fr"
+            ])
+        );
+    }
+
+    async getGTFSRoutes(network: string = ""): Promise<string> {
+        const { lines } = await this.getInitData(undefined, undefined, network);
+
+        return this.toCsv(
+            [
+                "route_id",
+                "agency_id",
+                "route_short_name",
+                "route_long_name",
+                "route_type",
+                "route_color",
+                "route_text_color"
+            ] as const,
+            Object.values(lines).map((line) => [
+                line.lineRef,
+                line.agencyRef,
+                line.shortName,
+                line.longName,
+                line.type,
+                line.color,
+                line.colorText
+            ])
+        );
+    }
+
+    async getGTFSStops(network: string = ""): Promise<string> {
+        const { stops } = await this.getInitData(undefined, undefined, network);
+
+        return this.toCsv(
+            [
+                "stop_id",
+                "stop_code",
+                "stop_name",
+                "stop_desc",
+                "stop_lat",
+                "stop_lon",
+                "zone_id",
+                "stop_url",
+                "location_type",
+                "parent_station",
+                "stop_timezone",
+                "wheelchair_boarding"
+            ] as const,
+            Object.values(stops).map((stop) => [
+                stop.StopPointRef,
+                stop.StopPointRef,
+                stop.StopName.value,
+                "",
+                stop.Location.Latitude,
+                stop.Location.Longitude,
+                "",
+                "",
+                "",
+                "",
+                "",
+                stop.wheelchair_boarding ?? 0
+            ])
+        );
+    }
+
+    private formatSecondsFromMinutes(totalMinutes: number): string {
+        const minutesInDay = 24 * 60;
+        const wrapped =
+            ((totalMinutes % minutesInDay) + minutesInDay) % minutesInDay;
+        const h = Math.floor(wrapped / 60);
+        const m = wrapped % 60;
+        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
+    }
+
+    async getGTFSFrequencies(_network: string = ""): Promise<string> {
+        // const schedules: IScheduleStopTime[] = [];
+
+        // for (const line in LineNumber) {
+
+        // }
+        return this.toCsv(
+            ["trip_id", "start_time", "end_time", "headway_secs"] as const,
+            Object.entries(LINE_FREQUENCIES).flatMap(([route, freq]) => {
+                const weekdayFreqs = freq.weekday.toGtfsFrequency().map(([start_time, end_time, headway_min]) => [
+                    `${route}_WEEKDAY`,
+                    start_time,
+                    end_time,
+                    headway_min * 60
+                ] as [string, string, string, number]);
+                const saturdayFreqs = freq.weekday.toGtfsFrequency().map(([start_time, end_time, headway_min]) => [
+                    `${route}_SATURDAY`,
+                    start_time,
+                    end_time,
+                    headway_min * 60
+                ] as [string, string, string, number]);
+                const sundayHolidaysFreqs = freq.weekday.toGtfsFrequency().map(([start_time, end_time, headway_min]) => [
+                    `${route}_SUNDAY_HOLIDAY`,
+                    start_time,
+                    end_time,
+                    headway_min * 60
+                ] as [string, string, string, number]);
+
+                return [
+                    ...weekdayFreqs,
+                    ...saturdayFreqs,
+                    ...sundayHolidaysFreqs
+                ];
+            })
+        );
+    }
+
+    async getGTFSTrips(network: string = ""): Promise<string> {
+        const { lines } = await this.getInitData(undefined, undefined, network);
+
+        return this.toCsv(
+            [
+                "route_id",
+                "service_id",
+                "trip_id",
+                "trip_headsign",
+                "trip_short_name",
+                "direction_id",
+                "block_id",
+                "shape_id",
+                "wheelchair_accessible",
+                "bikes_allowed"
+            ] as const,
+            Object.values(lines).flatMap(line => [
+                ...line.destinations.map(dest => [
+                    line.lineRef,
+                    "SVC_WEEKDAY",
+                    `${line.lineRef}_${dest.destinationDir}_WEEKDAY`,
+                    dest.destinationRef,
+                    "",
+                    dest.destinationDir,
+                    "",
+                    "",
+                    line.wheelchairAccessible ? 1 : 0,
+                    0
+                ]),
+                ...line.destinations.map(dest => [
+                    line.lineRef,
+                    "SVC_SATURDAY",
+                    `${line.lineRef}_${dest.destinationDir}_SATURDAY`,
+                    dest.destinationRef,
+                    "",
+                    dest.destinationDir,
+                    "",
+                    "",
+                    line.wheelchairAccessible ? 1 : 0,
+                    0
+                ]),
+                ...line.destinations.map(dest => [
+                    line.lineRef,
+                    "SVC_SUNDAY_HOLIDAY",
+                    `${line.lineRef}_${dest.destinationDir}_SUNDAY_HOLIDAY`,
+                    dest.destinationRef,
+                    "",
+                    dest.destinationDir,
+                    "",
+                    "",
+                    line.wheelchairAccessible ? 1 : 0,
+                    0
+                ]),
+            ] as [string, string, string, string, string, number, string, string, number, number][])
+        )
+    }
+
+    async getGTFSStopTimes(network: string = ""): Promise<string> {
+        const lines = await this.getInitData(undefined, undefined, network);
+        const rows: [
+            /* trip_id: */ string,
+            /* arrival_time: */ string,
+            /* departure_time: */ string,
+            /* stop_id: */ string,
+            /* stop_sequence: */ number,
+            /* pickup_type: */ number,
+            /* drop_off_type: */ number
+        ] = [] as unknown as [string, string, string, string, number, number, number];
+
+        const BASE_MINUTES = 5 * 60;
+        const SECONDS_PER_STOP = 60;
+
+        for (const line of Object.values(lines)) {
+            for (const dest of line.destinations) {
+                const direction = parseInt(dest.destinationDir, 10) as 0 | 1;
+                const stops = await this.getOrderedStops(line.lineRef, direction, undefined, network);
+                if (!stops.length) continue;
+
+                const serviceSuffixes = ["WEEKDAY", "SATURDAY", "SUNDAY_HOLIDAY"];
+                for (const suffix of serviceSuffixes) {
+                    const tripId = `${line.lineRef}_${direction}_${suffix}`;
+
+                    for (let i = 0; i < stops.length; i++) {
+                        const stop = stops[i];
+                        const minutes = BASE_MINUTES + i * (SECONDS_PER_STOP / 60);
+                        const time = this.formatSecondsFromMinutes(minutes);
+                        rows.push(
+                            tripId,
+                            time,
+                            time,
+                            stop.StopPointRef,
+                            i + 1,
+                            0,
+                            0
+                        );
+                    }
+                }
+            }
+        }
+
+        // If no data, add a dummy row to keep validators happy
+        // if (rows.length === 0) {
+        //     rows.push({
+        //         trip_id: "MOCK_TRIP",
+        //         arrival_time: "05:00:00",
+        //         departure_time: "05:00:00",
+        //         stop_id: "MOCK_STOP",
+        //         stop_sequence: 1,
+        //         pickup_type: 0,
+        //         drop_off_type: 0,
+        //     });
+        // }
+
+        return this.toCsv(
+            [
+                "trip_id",
+                "arrival_time",
+                "departure_time",
+                "stop_id",
+                "stop_sequence",
+                "pickup_type",
+                "drop_off_type",
+            ] as const,
+            [rows]
+        );
+    }
+
+    async getGTFSCalendar(network: string = ""): Promise<string> {
+        const perimeter = await this.getCalendarPerimeter(network);
+        const start = toGtfsDate(perimeter.start);
+        const end = toGtfsDate(perimeter.end);
+
+        return this.toCsv(
+            [
+                "service_id",
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+                "start_date",
+                "end_date",
+            ] as const,
+            [
+                ["SVC_WEEKDAY", 1, 1, 1, 1, 1, 0, 0, start, end],
+                ["SVC_SATURDAY", 0, 0, 0, 0, 0, 1, 0, start, end],
+                ["SVC_SUNDAY_HOLIDAY", 0, 0, 0, 0, 0, 0, 1, start, end]
+            ]
+        );
+    }
+
+    async getGTFSCalendarDates(_network: string = ""): Promise<string> {
+        await this.ensureHolidaysCache();
+
+        return this.toCsv(
+            ["service_id", "date", "exception_type"] as const,
+            CasaTramwayGTFS.gtfsHolidays.flatMap(date => [
+                ["SVC_WEEKDAY", date, 2],
+                ["SVC_SATURDAY", date, 2],
+                ["SVC_SUNDAY_HOLIDAY", date, 1]
+            ])
+        );
+    }
+
+    async getAllGTFS(network: string = ""): Promise<GtfsExportBundle> {
+        const [agency, routes, frequencies, trips, stopTimes, stops, calendar, calendarDates] =
+            await Promise.all([
+                this.getGTFSAgency(network),
+                this.getGTFSRoutes(network),
+                this.getGTFSFrequencies(network),
+                this.getGTFSTrips(network),
+                this.getGTFSStopTimes(network),
+                this.getGTFSStops(network),
+                this.getGTFSCalendar(network),
+                this.getGTFSCalendarDates(network)
+            ]);
+
+        return {
+            "agency.txt": agency,
+            "routes.txt": routes,
+            "frequencies.txt": frequencies,
+            "trips.txt": trips,
+            "stop_times.txt": stopTimes,
+            "stops.txt": stops,
+            "calendar.txt": calendar,
+            "calendar_dates.txt": calendarDates
+        };
+    }
+
+    async exportGTFSToDirectory(
+        outputDirectory: string,
+        network: string = "",
+    ): Promise<GtfsExportBundle> {
+        const bundle = await this.getAllGTFS(network);
+        await Deno.mkdir(outputDirectory, { recursive: true });
+        await Promise.all(
+            GTFS_EXPORT_FILES.map(async (fileName) =>
+                await Deno.writeTextFile(`${outputDirectory}\\${fileName}`, bundle[fileName])
+            )
+        );
+
+        return bundle;
+    }
+}
