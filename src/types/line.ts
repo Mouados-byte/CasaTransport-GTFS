@@ -187,7 +187,7 @@ export default class Line {
     wheelchairAccessible!: boolean;
     destinations!: {
         destinationRef: string;
-        destinationDir: number;
+        destinationDir: 0 | 1;
     }[];
     areas!: unknown[];
     agencyRef!: number;
@@ -292,11 +292,11 @@ export default class Line {
     }
 
     private destinationMapper(dest: { DestinationRef: string; DestinationDir: string }): {
-        destinationRef: string; destinationDir: number
+        destinationRef: string; destinationDir: 0 | 1
     } {
         return {
             destinationRef: dest.DestinationRef,
-            destinationDir: parseInt(dest.DestinationDir, 10)
+            destinationDir: parseInt(dest.DestinationDir, 10) as 0 | 1
         }
     }
 }

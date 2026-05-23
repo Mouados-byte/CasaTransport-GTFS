@@ -1,34 +1,55 @@
+import { RateLimitConfig, RateLimitedFetcher } from "./utils/RatelimitedFetcher.ts";
 import Line, { ILineWithStopTimes } from "./types/line.ts";
 import {
-    GtfsData, StopsByLine, StopPoint,
-    CalendarPerimeter, LineInfos, DeparturesOptions,
+    GtfsData, StopPoint, CalendarPerimeter, DeparturesOptions,
     ComputedTime, Destination, DiscoveryResponse, GtfsExportBundle,
-    StopsByLineCategory, LineNumber, TStopDepartures,
-    GtfsProtoData, IScheduleStopTime,
-    RoutePlannerResponse, LineName
+    LineNumber, TStopDepartures, GtfsProtoData, IScheduleStopTime,
+    LineFrequency, RoutePlannerResponse, LineName
 } from "./types/types.ts";
 import {
-    CASATRAMWAY_GTFS_URI, CASATRAMWAY_ROUTE_PLANNER_URI,
-    GTFS_EXPORT_FILES, LINE_FREQUENCIES
+    CASATRAMWAY_GTFS_URI, CASATRAMWAY_RATELIMIT_CONFIG,
+    CASATRAMWAY_ROUTE_PLANNER_RATELIMIT_CONFIG,
+    CASATRAMWAY_ROUTE_PLANNER_URI,
+    GTFS_EXPORT_FILES
 } from "./constants.ts";
+import { TimeBasedValue } from "./utils/TimeRange.ts";
 
 // @deno-types="./proto/orchestraProto.d.ts"
 import { proto } from "./proto/orchestraProto.js";
 import {
     ProtoClassConstructor, ProtoClasses,
-    ProtoStopFromStopPoint, WebpackStopPoint
+    ProtoStopFromStopPoint
 } from "./proto/types.ts";
-import { StopPointFromWebpack } from "./types/stop.ts";
-import { getHolidaysSundaysCache, getRoutePlannerSessionCookie, moveElement, toGtfsDate } from "./utils/utils.ts";
+import {
+    dateToCasaTramwayDate,
+    toGtfsDate, getHolidaysSundaysCache,
+    getClosestSaturday, getClosestWeekday,
+    minutesToTime,
+    moveArrayElement, 
+    normalizeStopName,
+    getRoutePlannerSessionCookie,
+    HolidaysSundaysCache,
+    getClosestSunday
+} from "./utils/utils.ts";
+
+import logger from "./utils/log.ts"
 
 export default class CasaTramwayGTFS {
-    private static gtfsHolidays: string[];
+    private static gtfsHolidays: HolidaysSundaysCache;
+    public fetcher: RateLimitedFetcher;
+    public routePlannerFetcher: RateLimitedFetcher;
 
     constructor(
+        ratelimitConfig: RateLimitConfig = CASATRAMWAY_RATELIMIT_CONFIG,
+        routePlannerRatelimitConfig: RateLimitConfig
+            = CASATRAMWAY_ROUTE_PLANNER_RATELIMIT_CONFIG,
         private readonly gtfsUri: string = CASATRAMWAY_GTFS_URI,
         private readonly routePlannerUri: string = CASATRAMWAY_ROUTE_PLANNER_URI,
         private readonly encodeUriPath: boolean = false
-    ) {}
+    ) {
+        this.fetcher = new RateLimitedFetcher(ratelimitConfig);
+        this.routePlannerFetcher = new RateLimitedFetcher(routePlannerRatelimitConfig)
+    }
 
     private makeApiUrl(pathAndQuery: string): string {
         const normalized = pathAndQuery.startsWith("/")
@@ -47,14 +68,17 @@ export default class CasaTramwayGTFS {
         useRoutePlannerURI?: boolean
     ): Promise<T> {
         const url = useRoutePlannerURI ? pathAndQuery : this.makeApiUrl(pathAndQuery);
-        const response = await fetch(url, reqParams);
+        const response = await (useRoutePlannerURI ? this.routePlannerFetcher : this.fetcher)
+            .fetchRaw(url, reqParams);
         let responseJson: object | false;
+
         // all /phtv/get endpoints return 200 with body "false" if the request is invalid
         if (!response.ok || (responseJson = await response.json()) === false) {
             throw new Error(
                `Failed to fetch ${pathAndQuery} (${response.status} ${response.statusText}) from ${url}`
             );
         }
+
         return ctor ? new ctor(responseJson) : responseJson as T;
     }
 
@@ -63,7 +87,7 @@ export default class CasaTramwayGTFS {
         proto: T
     ): Promise<InstanceType<T>> {
         const url = this.makeApiUrl(pathAndQuery);
-        const response = await fetch(url);
+        const response = await this.fetcher.fetchRaw(url);
         if (!response.ok) {
             throw new Error(
                 `Failed to fetch ${pathAndQuery} (${response.status} ${response.statusText}) from ${url}`
@@ -81,12 +105,13 @@ export default class CasaTramwayGTFS {
         }
     }
 
-    private numberFrom(value: unknown): number | null {
-        if (value === undefined || value === null || value === "") {
-            return null;
-        }
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
+    private formatSecondsFromMinutes(totalMinutes: number): string {
+        const minutesInDay = 24 * 60;
+        const wrapped =
+            ((totalMinutes % minutesInDay) + minutesInDay) % minutesInDay;
+        const h = Math.floor(wrapped / 60);
+        const m = wrapped % 60;
+        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
     }
 
     private unwrapItems<T>(payload: DiscoveryResponse<T>, ctor?: new (obj: object) => T): T[] {
@@ -99,8 +124,33 @@ export default class CasaTramwayGTFS {
         return Object.values(payload.items) as T[];
     }
 
+    private formatRoutePlannerID(
+        line: Line,
+        stop: StopPoint<true | false>,
+        allStops: { [key: string]: StopPoint<true | false> }
+    ): string {
+        const stopID = parseInt(stop.StopPointRef);
 
-    // Equivalent of initDataProto.ts (JSON discovery endpoint fallback)
+        if (line.lineRef.startsWith("T")) {
+            return `STOPAREA|CASATRAMWAY:${stopID}`;
+        }
+
+        // bus stop terminals have 2 identical StopPoints with different StopPointRefs
+        // for some reason
+        const otherStopID = Object.values(allStops).find(s =>
+            Object.keys(s.Lines).includes(line.lineRef) &&
+            s.StopStreet === stop.StopStreet &&
+            s.StopStreetNumber === stop.StopStreetNumber &&
+            s.StopPointRef !== stop.StopPointRef
+        )!.StopPointRef;
+
+        return stop.StopName.value.endsWith("Terminus")
+            ? `STOPAREA|ISSTOPPLACE:CASATRAMWAY:${stopID}:CASATRAMWAY:${otherStopID}`
+            : `STOPAREA|CASATRAMWAY:${stopID}`;
+    }
+
+
+    // Equivalent of initDataProto.ts (JSON discovery endpoint)
     async getInitData(
         _area?: string,
         onlyPhysicals?: boolean,
@@ -120,11 +170,11 @@ export default class CasaTramwayGTFS {
         const linesRaw = this.unwrapItems(linesResponse, Line);
         const stopsRaw = this.unwrapItems(stopsResponse);
 
-        const lines: { [key: string]: Line } = Object.fromEntries(
+        const lines = Object.fromEntries(
             linesRaw.map(line => [line.lineRef, line])
-        );
+        ) as GtfsData["lines"];
 
-        const stops: { [key: string]: StopPoint<false> } = Object.fromEntries(
+        const stops: GtfsData["stops"] = Object.fromEntries(
             stopsRaw.map(stop => [stop.StopPointRef, stop])
         );
         // for (const rawStop of stopsRaw) {
@@ -186,9 +236,9 @@ export default class CasaTramwayGTFS {
             this.fetchProto(stopsPath, proto.StopsApiResponse)
         ]);
 
-        const lines: GtfsProtoData["lines"] = Object.fromEntries(
-            linesResponse.lines.map(line => [line.ref, new proto.Line(line)])
-        );
+        const lines = Object.fromEntries(
+            linesResponse.lines.map(line => [line.ref as LineName, new proto.Line(line)])
+        ) as GtfsProtoData["lines"];
 
         const stops: GtfsProtoData["stops"] = Object.fromEntries(
             stopsResponse.stops.map(stop => [stop.ref, new proto.Stop(stop)])
@@ -219,9 +269,7 @@ export default class CasaTramwayGTFS {
 
     // Equivalent of getCalendarPerimeter.ts
     async getCalendarPerimeter(network: string = ""): Promise<CalendarPerimeter> {
-        const payload = await this.fetchJson<
-            { start: string; end: string }
-        >(`/calendar-perimeter?reseau=${network}`);
+        const payload = await this.fetchJson<CalendarPerimeter>(`/calendar-perimeter?reseau=${network}`);
 
         if (!payload) {
             throw new Error(
@@ -229,14 +277,11 @@ export default class CasaTramwayGTFS {
             );
         }
 
-        return {
-            start: payload.start,
-            end: payload.end
-        };
+        return payload;
     }
 
     // Equivalent of internal getLineInfos(...) in departuresFromGtfs.ts
-    async getLine(lineId: LineName, network: string = ""): Promise<Line | null> {
+    async getLine(lineId: LineName, network: string = ""): Promise<Line> {
         const payload = await this.fetchJson(`/line?reseau=${network}&line=${lineId}`, Line);
 
         return payload;
@@ -299,12 +344,16 @@ export default class CasaTramwayGTFS {
 
     // Equivalent of gtfsStopDepartures(...) in departuresFromGtfs.ts
     async getStopDepartures(
-        stop: StopPoint<true | false> | proto.Stop,
+        stop: StopPoint<true | false> | proto.Stop | string,
         network: string = "",
         options: DeparturesOptions = {}
     ): Promise<TStopDepartures> {
         const limit = options.limit ?? 2;
-        const ref = stop instanceof proto.Stop ? stop.ref : stop.StopPointRef;
+        const ref = stop instanceof proto.Stop
+            ? stop.ref
+            : typeof stop === "string"
+                ?  stop :
+                stop.StopPointRef;
         let path = `/stop-stoptimes-discovery?nbtimes=${limit}&stop=${ref}&reseau=${network}`;
 
         if (options.date) {
@@ -392,23 +441,24 @@ export default class CasaTramwayGTFS {
         onlyPhysicals?: boolean,
         network: string = ""
     ): Promise<StopPoint<true>[]> {
-        const lineInfo = await this.getLine(line, network);
+        const { lines, stops: allStops } = await this.getInitData(undefined, onlyPhysicals, network);
         const lineStops = await this.getLineStops(line, direction, onlyPhysicals, network);
 
-        if (!lineInfo)
-            return [];
+        const lineInfo = lines[line];
 
+        // busway terminals have Arrivée suffix for some god forsaken reason
+        // and Oulmes busway terminal has lowercase t in "Terminus" for some other fucking reason
         const firstTerminalName = lineInfo!.destinations.find(
             dest => dest.destinationDir !== direction
-        )!.destinationRef;
+        )!.destinationRef.replace("terminus", "Terminus").replace(" Arrivée", "");
         const lastTerminalName = lineInfo!.destinations.find(
             dest => dest.destinationDir === direction
-        )!.destinationRef;
+        )!.destinationRef.replace("terminus", "Terminus").replace(" Arrivée", "");
 
         const firstTerminalStop = lineStops.find(s => s.StopName.value === firstTerminalName)!;
         const lastTerminalStop = lineStops.find(s => s.StopName.value === lastTerminalName)!;
 
-        // 5:00 AM is the earliest departure time for all lines
+        // 05:00 AM is the earliest departure time for all lines
         let departureTime: string;
         {
             const now = new Date();
@@ -426,17 +476,17 @@ export default class CasaTramwayGTFS {
             method: "POST",
             body: new URLSearchParams({
                 estimatedResults: "true",
-                "from[id]": `STOPAREA|CASATRAMWAY:${firstTerminalStop.StopPointRef}`,
+                "from[id]": this.formatRoutePlannerID(lineInfo, firstTerminalStop, allStops),
                 "from[value]": firstTerminalName,
                 "from[latitude]": firstTerminalStop.Location.Latitude,
                 "from[longitude]": firstTerminalStop.Location.Longitude,
-                "to[id]": `STOPAREA|CASATRAMWAY:${lastTerminalStop.StopPointRef}`,
+                "to[id]": this.formatRoutePlannerID(lineInfo, lastTerminalStop, allStops),
                 "to[value]": lastTerminalName,
                 "to[latitude]": lastTerminalStop.Location.Latitude,
                 "to[longitude]": lastTerminalStop.Location.Longitude,
                 departureDateTime: departureTime,
                 arrivalDateTime: "",
-                "modes[]": "T1".startsWith("T") ? "TRAM" : "BUS",
+                "modes[]": line.startsWith("T") ? "TRAM" : "BUS",
                 "walk[speed]": "1",
                 "bike[speed]": "1",
                 displayFacilities: "true",
@@ -471,18 +521,127 @@ export default class CasaTramwayGTFS {
 
             return aIdx - bIdx;
         });
-        moveElement(
+        moveArrayElement(
             sortedStops, 
             sortedStops.findIndex(s => s.StopPointRef === firstTerminalStop.StopPointRef),
             0
         );
-        moveElement(
+        moveArrayElement(
             sortedStops, 
             sortedStops.findIndex(s => s.StopPointRef === lastTerminalStop.StopPointRef),
             -1
         );
 
         return sortedStops;
+    }
+
+
+    lineFrequencyFromStopTimes(
+        weekdays: IScheduleStopTime[],
+        saturdays: IScheduleStopTime[],
+        holidays: IScheduleStopTime[]
+    ): LineFrequency {
+        const parseDepartureMinutes = (schedule: IScheduleStopTime): number | null => {
+            const parts = schedule.DepTime.match(/(\d+)/g);
+            if (!parts || parts.length < 5) {
+                return null;
+            }
+
+            const hours = Number(parts[3]);
+            const mins = Number(parts[4]);
+            if (!Number.isFinite(hours) || !Number.isFinite(mins)) {
+                return null;
+            }
+
+            return hours * 60 + mins;
+        };
+
+        const normalizeHeadway = (diffs: number[]): number => {
+            const avg = diffs.reduce((sum, value) => sum + value, 0) / diffs.length;
+            return Math.round(avg * 2) / 2;
+        };
+
+        const shouldMerge = (currentDiff: number, nextDiff: number): boolean => {
+            if (currentDiff === nextDiff) {
+                return true;
+            }
+
+            const isFiveOrSix = (value: number) => value === 5 || value === 6;
+            return isFiveOrSix(currentDiff) && isFiveOrSix(nextDiff);
+        };
+
+        const buildFrequency = (schedules: IScheduleStopTime[]): TimeBasedValue<number> => {
+            const minutes = schedules
+                .map(parseDepartureMinutes)
+                .filter((value): value is number => value !== null)
+                .sort((a, b) => a - b);
+
+            const uniqueMinutes: number[] = [];
+            for (const value of minutes) {
+                if (uniqueMinutes[uniqueMinutes.length - 1] !== value) {
+                    uniqueMinutes.push(value);
+                }
+            }
+
+            if (uniqueMinutes.length < 2) {
+                return new TimeBasedValue([]);
+            }
+
+            const ranges: [string, string, number][] = [];
+            let rangeStart = uniqueMinutes[0];
+            let currentDiff: number | null = null;
+            let diffGroup: number[] = [];
+            let previous = uniqueMinutes[0];
+
+            for (let i = 1; i < uniqueMinutes.length; i++) {
+                const current = uniqueMinutes[i];
+                const diff = current - previous;
+                if (diff <= 0) {
+                    previous = current;
+                    continue;
+                }
+
+                if (currentDiff === null) {
+                    currentDiff = diff;
+                    diffGroup = [diff];
+                    previous = current;
+                    continue;
+                }
+
+                if (shouldMerge(currentDiff, diff)) {
+                    diffGroup.push(diff);
+                    previous = current;
+                    continue;
+                }
+
+                ranges.push([
+                    minutesToTime(rangeStart),
+                    minutesToTime(previous),
+                    normalizeHeadway(diffGroup)
+                ]);
+
+                rangeStart = previous;
+                currentDiff = diff;
+                diffGroup = [diff];
+                previous = current;
+            }
+
+            if (diffGroup.length > 0) {
+                ranges.push([
+                    minutesToTime(rangeStart),
+                    minutesToTime(previous),
+                    normalizeHeadway(diffGroup)
+                ]);
+            }
+
+            return new TimeBasedValue(ranges);
+        };
+
+        return {
+            weekday: buildFrequency(weekdays),
+            saturday: buildFrequency(saturdays),
+            sunday_holiday: buildFrequency(holidays)
+        };
     }
 
 
@@ -515,14 +674,16 @@ export default class CasaTramwayGTFS {
     // GTFS data methods
 
     async getGTFSAgency(network: string = ""): Promise<string> {
+        logger.info("Generating GTFS agency.txt...");
+
         const { lines } = await this.getInitData(undefined, undefined, network);
-        const agencies = new Map<number, { name: string }>();
+        const agencies = new Map<number, string>();
 
         for (const line of Object.values(lines)) {
             const agencyId = line.agencyRef;
             const agencyName = line.agencyName;
             if (!agencies.has(agencyId)) {
-                agencies.set(agencyId, { name: agencyName });
+                agencies.set(agencyId, agencyName);
             }
         }
 
@@ -536,7 +697,7 @@ export default class CasaTramwayGTFS {
             ] as const,
             Array.from(agencies.entries()).map(([id, agency]) => [
                 id,
-                agency.name,
+                agency,
                 "https://www.casatramway.ma",
                 "Africa/Casablanca",
                 "fr"
@@ -545,6 +706,8 @@ export default class CasaTramwayGTFS {
     }
 
     async getGTFSRoutes(network: string = ""): Promise<string> {
+        logger.info("Generating GTFS routes.txt");
+
         const { lines } = await this.getInitData(undefined, undefined, network);
 
         return this.toCsv(
@@ -570,6 +733,8 @@ export default class CasaTramwayGTFS {
     }
 
     async getGTFSStops(network: string = ""): Promise<string> {
+        logger.info("Generating GTFS stops.txt...");
+
         const { stops } = await this.getInitData(undefined, undefined, network);
 
         return this.toCsv(
@@ -590,7 +755,7 @@ export default class CasaTramwayGTFS {
             Object.values(stops).map((stop) => [
                 stop.StopPointRef,
                 stop.StopPointRef,
-                stop.StopName.value,
+                normalizeStopName(stop.StopName.value),
                 "",
                 stop.Location.Latitude,
                 stop.Location.Longitude,
@@ -604,54 +769,107 @@ export default class CasaTramwayGTFS {
         );
     }
 
-    private formatSecondsFromMinutes(totalMinutes: number): string {
-        const minutesInDay = 24 * 60;
-        const wrapped =
-            ((totalMinutes % minutesInDay) + minutesInDay) % minutesInDay;
-        const h = Math.floor(wrapped / 60);
-        const m = wrapped % 60;
-        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
-    }
+    // async getGTFSShapes(network: string = ""): Promise<string> {
+    //     logger.info("Generating GTFS shapes.txt...");
 
-    async getGTFSFrequencies(_network: string = ""): Promise<string> {
-        // const schedules: IScheduleStopTime[] = [];
+    //     const { lines } = await this.getInitData(undefined, undefined, network);
 
-        // for (const line in LineNumber) {
 
-        // }
+    // }
+
+    async getGTFSFrequencies(network: string = ""): Promise<string> {
+        logger.info("Generating GTFS frequencies.txt");
+
+        await this.ensureHolidaysCache();
+        const allHolidays = [
+            ...CasaTramwayGTFS.gtfsHolidays.holidays,
+            ...CasaTramwayGTFS.gtfsHolidays.sundays
+        ] as const;
+
+        const { lines, stops } = await this.getInitData(undefined, undefined, network);
+        const rows: [string, string, string, number][] = [];
+
+        const lineFreqToRows = (trip: string, freq: TimeBasedValue<number>): [string, string, string, number][] =>
+            freq.toGtfsFrequency().map(([start_time, end_time, headway_min]) => [
+                trip,
+                start_time,
+                end_time,
+                headway_min * 60
+            ]);
+
+        for (const line of Object.values(lines)) {
+            const lineStops = Object.values(stops).filter(s => Object.keys(s.Lines).includes(line.lineRef))!;
+            const lineTerminals = lineStops.filter(s => s.StopName.value.indexOf("Terminus") !== -1);
+
+            const firstTerminalDest = lineStops[0].Lines[line.lineRef]!.Dests.find(d => d.direction === 0)!;
+            const lastTerminalDest = lineStops[0].Lines[line.lineRef]!.Dests.find(d => d.direction !== 0)!;
+            const firstTerminalRef = lineTerminals.find(t => t.StopName.value === firstTerminalDest.lib)!;
+            const lastTerminalRef = lineTerminals.find(t => t.StopName.value === lastTerminalDest.lib)!;
+
+            for (const { destinationRef: _, destinationDir: dir } of line.destinations) {
+                const key = `${line.lineRef}_${dir}` as const;
+                const terminalRef = dir === 0 ? firstTerminalRef : lastTerminalRef;
+
+                const stopTimesWeekdays = await this.getStopDepartures(terminalRef, network, {
+                    limit: 200,
+                    time: "05:00:00",
+                    date: dateToCasaTramwayDate(getClosestWeekday(undefined, allHolidays))
+                });
+                const stopTimesSaturdays = await this.getStopDepartures(terminalRef, network, {
+                    limit: 200,
+                    time: "05:00:00",
+                    date: dateToCasaTramwayDate(getClosestSaturday(undefined, allHolidays))
+                });
+                const stopTimesSundaysHolidays = await this.getStopDepartures(terminalRef, network, {
+                    limit: 200,
+                    time: "05:00:00",
+                    date: dateToCasaTramwayDate(getClosestSunday())
+                });
+
+                const lineSchedule = this.lineFrequencyFromStopTimes(
+                    stopTimesWeekdays[key]!.Schedule,
+                    stopTimesSaturdays[key]!.Schedule,
+                    stopTimesSundaysHolidays[key]!.Schedule
+                );
+
+                rows.push(
+                    ...lineFreqToRows(`${line.lineRef}_${dir}_WEEKDAY`, lineSchedule.weekday)
+                );
+                rows.push(
+                    ...lineFreqToRows(`${line.lineRef}_${dir}_SATURDAY`, lineSchedule.saturday)
+                );
+                rows.push(
+                    ...lineFreqToRows(`${line.lineRef}_${dir}_SUNDAY_HOLIDAY`, lineSchedule.sunday_holiday)
+                );
+            }
+        }
+
         return this.toCsv(
             ["trip_id", "start_time", "end_time", "headway_secs"] as const,
-            Object.entries(LINE_FREQUENCIES).flatMap(([route, freq]) => {
-                const weekdayFreqs = freq.weekday.toGtfsFrequency().map(([start_time, end_time, headway_min]) => [
-                    `${route}_WEEKDAY`,
-                    start_time,
-                    end_time,
-                    headway_min * 60
-                ] as [string, string, string, number]);
-                const saturdayFreqs = freq.weekday.toGtfsFrequency().map(([start_time, end_time, headway_min]) => [
-                    `${route}_SATURDAY`,
-                    start_time,
-                    end_time,
-                    headway_min * 60
-                ] as [string, string, string, number]);
-                const sundayHolidaysFreqs = freq.weekday.toGtfsFrequency().map(([start_time, end_time, headway_min]) => [
-                    `${route}_SUNDAY_HOLIDAY`,
-                    start_time,
-                    end_time,
-                    headway_min * 60
-                ] as [string, string, string, number]);
-
-                return [
-                    ...weekdayFreqs,
-                    ...saturdayFreqs,
-                    ...sundayHolidaysFreqs
-                ];
-            })
+            rows
         );
     }
 
     async getGTFSTrips(network: string = ""): Promise<string> {
+        logger.info("Generating GTFS trips.txt");
+
         const { lines } = await this.getInitData(undefined, undefined, network);
+
+        const lineDestToRow = (line: Line, trip: string): [
+            string, string, string, string, string, number, string, string, number, number
+        ][] =>
+            line.destinations.map(dest => [
+                line.lineRef,
+                `SVC_${trip}`,
+                `${line.lineRef}_${dest.destinationDir}_${trip}`,
+                dest.destinationRef,
+                "",
+                dest.destinationDir,
+                "",
+                "",
+                line.wheelchairAccessible ? 1 : 0,
+                0
+            ]);
 
         return this.toCsv(
             [
@@ -667,48 +885,17 @@ export default class CasaTramwayGTFS {
                 "bikes_allowed"
             ] as const,
             Object.values(lines).flatMap(line => [
-                ...line.destinations.map(dest => [
-                    line.lineRef,
-                    "SVC_WEEKDAY",
-                    `${line.lineRef}_${dest.destinationDir}_WEEKDAY`,
-                    dest.destinationRef,
-                    "",
-                    dest.destinationDir,
-                    "",
-                    "",
-                    line.wheelchairAccessible ? 1 : 0,
-                    0
-                ]),
-                ...line.destinations.map(dest => [
-                    line.lineRef,
-                    "SVC_SATURDAY",
-                    `${line.lineRef}_${dest.destinationDir}_SATURDAY`,
-                    dest.destinationRef,
-                    "",
-                    dest.destinationDir,
-                    "",
-                    "",
-                    line.wheelchairAccessible ? 1 : 0,
-                    0
-                ]),
-                ...line.destinations.map(dest => [
-                    line.lineRef,
-                    "SVC_SUNDAY_HOLIDAY",
-                    `${line.lineRef}_${dest.destinationDir}_SUNDAY_HOLIDAY`,
-                    dest.destinationRef,
-                    "",
-                    dest.destinationDir,
-                    "",
-                    "",
-                    line.wheelchairAccessible ? 1 : 0,
-                    0
-                ]),
-            ] as [string, string, string, string, string, number, string, string, number, number][])
+                ...lineDestToRow(line, "WEEKDAY"),
+                ...lineDestToRow(line, "SATURDAY"),
+                ...lineDestToRow(line, "SUNDAY_HOLIDAY"),
+            ])
         )
     }
 
     async getGTFSStopTimes(network: string = ""): Promise<string> {
-        const lines = await this.getInitData(undefined, undefined, network);
+        logger.info("Generating GTFS stop_times.txt...");
+
+        const { lines } = await this.getInitData(undefined, undefined, network);
         const rows: [
             /* trip_id: */ string,
             /* arrival_time: */ string,
@@ -717,26 +904,28 @@ export default class CasaTramwayGTFS {
             /* stop_sequence: */ number,
             /* pickup_type: */ number,
             /* drop_off_type: */ number
-        ] = [] as unknown as [string, string, string, string, number, number, number];
+        ][] = [];
 
         const BASE_MINUTES = 5 * 60;
         const SECONDS_PER_STOP = 60;
 
         for (const line of Object.values(lines)) {
             for (const dest of line.destinations) {
-                const direction = parseInt(dest.destinationDir, 10) as 0 | 1;
+                // NOTE: could fetch stops once and reverse for other direction
+                // but maybe in the future lines could have different stops per direction
+                const direction = dest.destinationDir;
                 const stops = await this.getOrderedStops(line.lineRef, direction, undefined, network);
                 if (!stops.length) continue;
 
-                const serviceSuffixes = ["WEEKDAY", "SATURDAY", "SUNDAY_HOLIDAY"];
+                const serviceSuffixes = ["WEEKDAY", "SATURDAY", "SUNDAY_HOLIDAY"] as const;
                 for (const suffix of serviceSuffixes) {
-                    const tripId = `${line.lineRef}_${direction}_${suffix}`;
+                    const tripId = `${line.lineRef}_${direction}_${suffix}` as const;
 
                     for (let i = 0; i < stops.length; i++) {
                         const stop = stops[i];
                         const minutes = BASE_MINUTES + i * (SECONDS_PER_STOP / 60);
                         const time = this.formatSecondsFromMinutes(minutes);
-                        rows.push(
+                        rows.push([
                             tripId,
                             time,
                             time,
@@ -744,24 +933,11 @@ export default class CasaTramwayGTFS {
                             i + 1,
                             0,
                             0
-                        );
+                        ]);
                     }
                 }
             }
         }
-
-        // If no data, add a dummy row to keep validators happy
-        // if (rows.length === 0) {
-        //     rows.push({
-        //         trip_id: "MOCK_TRIP",
-        //         arrival_time: "05:00:00",
-        //         departure_time: "05:00:00",
-        //         stop_id: "MOCK_STOP",
-        //         stop_sequence: 1,
-        //         pickup_type: 0,
-        //         drop_off_type: 0,
-        //     });
-        // }
 
         return this.toCsv(
             [
@@ -773,11 +949,13 @@ export default class CasaTramwayGTFS {
                 "pickup_type",
                 "drop_off_type",
             ] as const,
-            [rows]
+            rows
         );
     }
 
     async getGTFSCalendar(network: string = ""): Promise<string> {
+        logger.info("Generating GTFS calendar.txt...");
+
         const perimeter = await this.getCalendarPerimeter(network);
         const start = toGtfsDate(perimeter.start);
         const end = toGtfsDate(perimeter.end);
@@ -804,11 +982,16 @@ export default class CasaTramwayGTFS {
     }
 
     async getGTFSCalendarDates(_network: string = ""): Promise<string> {
+        logger.info("Generating GTFS calendar_dates.txt...");
+
         await this.ensureHolidaysCache();
 
         return this.toCsv(
             ["service_id", "date", "exception_type"] as const,
-            CasaTramwayGTFS.gtfsHolidays.flatMap(date => [
+            [
+                ...CasaTramwayGTFS.gtfsHolidays.holidays,
+                ...CasaTramwayGTFS.gtfsHolidays.sundays
+            ].flatMap(date => [
                 ["SVC_WEEKDAY", date, 2],
                 ["SVC_SATURDAY", date, 2],
                 ["SVC_SUNDAY_HOLIDAY", date, 1]
@@ -816,8 +999,39 @@ export default class CasaTramwayGTFS {
         );
     }
 
+    async getGTFSFeedInfo(network: string = ""): Promise<string> {
+        logger.info("Generating GTFS feed_info.txt...");
+
+        const perimeter = await this.getCalendarPerimeter(network);
+        const start = toGtfsDate(perimeter.start);
+        const end = toGtfsDate(perimeter.end);
+
+        return this.toCsv(
+            [
+                "feed_publisher_name",
+                "feed_publisher_url",
+                "feed_lang",
+                "feed_start_date",
+                "feed_end_date",
+                "feed_version",
+                "feed_contact_email",
+                "feed_contact_url"
+            ] as const,
+            [[
+                "SpaghettDev",
+                "https://spaghettdev.me",
+                "fr",
+                start,
+                end,
+                "1.0",
+                "spaghettdev-gtfs@gmail.com",
+                "https://spaghettdev.me"
+            ]]
+        )
+    }
+
     async getAllGTFS(network: string = ""): Promise<GtfsExportBundle> {
-        const [agency, routes, frequencies, trips, stopTimes, stops, calendar, calendarDates] =
+        const [agency, routes, frequencies, trips, stopTimes, stops, calendar, calendarDates, feedInfo] =
             await Promise.all([
                 this.getGTFSAgency(network),
                 this.getGTFSRoutes(network),
@@ -826,7 +1040,8 @@ export default class CasaTramwayGTFS {
                 this.getGTFSStopTimes(network),
                 this.getGTFSStops(network),
                 this.getGTFSCalendar(network),
-                this.getGTFSCalendarDates(network)
+                this.getGTFSCalendarDates(network),
+                this.getGTFSFeedInfo(network)
             ]);
 
         return {
@@ -837,7 +1052,8 @@ export default class CasaTramwayGTFS {
             "stop_times.txt": stopTimes,
             "stops.txt": stops,
             "calendar.txt": calendar,
-            "calendar_dates.txt": calendarDates
+            "calendar_dates.txt": calendarDates,
+            "feed_info.txt": feedInfo
         };
     }
 
@@ -848,10 +1064,12 @@ export default class CasaTramwayGTFS {
         const bundle = await this.getAllGTFS(network);
         await Deno.mkdir(outputDirectory, { recursive: true });
         await Promise.all(
-            GTFS_EXPORT_FILES.map(async (fileName) =>
-                await Deno.writeTextFile(`${outputDirectory}\\${fileName}`, bundle[fileName])
+            GTFS_EXPORT_FILES.map((fileName) =>
+                Deno.writeTextFile(`${outputDirectory}\\${fileName}`, bundle[fileName])
             )
         );
+
+        logger.info("Done exporting GTFS files to directory:", outputDirectory);
 
         return bundle;
     }

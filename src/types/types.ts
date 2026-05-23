@@ -20,7 +20,8 @@ export type GtfsExportFileName =
     | "stop_times.txt"
     | "stops.txt"
     | "calendar.txt"
-    | "calendar_dates.txt";
+    | "calendar_dates.txt"
+    | "feed_info.txt";
 
 export type GtfsExportBundle = Record<GtfsExportFileName, string>;
 
@@ -109,12 +110,12 @@ export interface StopPoint<T extends boolean> {
 
 export interface GtfsData {
     stops: { [key: string]: StopPoint<false> };
-    lines: { [key: string]: Line };
+    lines: { [key in LineNumber]: Line };
 }
 
 export interface GtfsProtoData {
     stops: { [key: string]: proto.Stop };
-    lines: { [key: string]: proto.Line };
+    lines: { [key in LineNumber]: proto.Line };
 }
 
 export interface StopsByDestination {

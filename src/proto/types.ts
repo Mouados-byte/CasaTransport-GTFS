@@ -11,7 +11,7 @@ export type ProtoClasses = {
 export type ProtoClassConstructor<T extends ProtoClasses> = {
     // deno-lint-ignore no-explicit-any
     [K in keyof typeof proto]: typeof proto[K] extends abstract new (...args: any) => infer I
-        ? I extends T ? typeof proto[K] : never
+        ? T extends I ? typeof proto[K] : never
         : never
 }[keyof typeof proto];
 

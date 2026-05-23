@@ -14,3 +14,9 @@ cache/
 
 # dumped casatramway.ma webpack files
 mapped@www.casatramway.ma/
+
+# logs
+/app.log
+
+# GTFS output
+gtfs/
