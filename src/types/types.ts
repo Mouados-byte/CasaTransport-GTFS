@@ -19,6 +19,7 @@ export type GtfsExportFileName =
     | "trips.txt"
     | "stop_times.txt"
     | "stops.txt"
+    | "shapes.txt"
     | "calendar.txt"
     | "calendar_dates.txt"
     | "feed_info.txt";

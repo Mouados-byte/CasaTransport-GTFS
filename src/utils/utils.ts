@@ -1,6 +1,6 @@
 import { eachWeekendOfYear } from "date-fns";
-import { fromFileUrl } from "deno-mod";
 import {
+    CACHE_DIRECTORY,
     CALENDARIFIC_API_KEY,
     CASATRAMWAY_ROUTE_PLANNER_WIDGET_URI
 } from "../constants.ts";
@@ -101,6 +101,12 @@ export const normalizeStopName = (name: string): string => {
         .join('');
 }
 
+export const safeGet = <T extends object, K extends keyof T = keyof T>(
+    obj: T, key: string
+): T[K] | undefined => {
+    return key in obj ? obj[key as K] : undefined;
+}
+
 export const getMoroccanHolidays = async (year: number): Promise<GtfsDate[]> => {
     const url = `https://calendarific.com/api/v2/holidays?api_key=${CALENDARIFIC_API_KEY}&country=MA&year=${year}`;
 
@@ -162,9 +168,7 @@ export const getClosestSunday = (date: Date = new Date()): Date => {
 
 export const getHolidaysSundaysCache = async (): Promise<HolidaysSundaysCache> => {
     const currentYear = new Date().getFullYear();
-    const filepath = fromFileUrl(
-        new URL("../../cache/holidays_sundays.json", import.meta.url)
-    ).replaceAll("\\", "/");
+    const filepath = `${CACHE_DIRECTORY}/holidays_sundays.json`;
     const allHolidays: HolidaysSundaysCache = {
         holidays: [],
         sundays: []
@@ -193,17 +197,14 @@ export const getHolidaysSundaysCache = async (): Promise<HolidaysSundaysCache> =
             sundays: filteredSundays.sort()
         });
 
-        await Deno.mkdir(filepath.substring(0, filepath.lastIndexOf("/")), { recursive: true });
         await Deno.writeTextFile(filepath, JSON.stringify(allHolidays, null, 4));
     }
 
     return allHolidays;
 }
 
-export async function getRoutePlannerSessionCookie (): Promise<{ cookie: string, expiresAt: string }> {
-    const filepath = fromFileUrl(
-        new URL("../../cache/route_planner_cookie.json", import.meta.url)
-    ).replaceAll("\\", "/");
+export const getRoutePlannerSessionCookie = async (): Promise<{ cookie: string, expiresAt: string }> => {
+    const filepath = `${CACHE_DIRECTORY}/route_planner_cookie.json`;
     const cookieData = {
         cookie: "",
         expiresAt: ""
@@ -222,7 +223,7 @@ export async function getRoutePlannerSessionCookie (): Promise<{ cookie: string,
         cookieData.expiresAt = expiresAt;
     } catch (error: unknown) {
         if (!(error instanceof Deno.errors.NotFound)) {
-            throw new Error(`Failed to read holidays cache: ${(<Error>error).message}`);
+            throw new Error(`Failed to read Route Planner cache: ${(<Error>error).message}`);
         }
 
         const widgetUrl = new URL(CASATRAMWAY_ROUTE_PLANNER_WIDGET_URI);
@@ -261,9 +262,21 @@ export async function getRoutePlannerSessionCookie (): Promise<{ cookie: string,
         // TODO: is 1 hour correct?
         cookieData.expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
-        await Deno.mkdir(filepath.substring(0, filepath.lastIndexOf("/")), { recursive: true });
         await Deno.writeTextFile(filepath, JSON.stringify(cookieData, null, 4));
     }
 
     return cookieData;
+}
+
+export const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371000; // metres
+    const φ1 = lat1 * Math.PI/180;
+    const φ2 = lat2 * Math.PI/180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
 }

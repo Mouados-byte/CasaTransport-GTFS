@@ -1,12 +1,8 @@
 import * as logger from "deno-log";
-import { fromFileUrl } from "deno-mod";
+import { BASE_DIR } from "../constants.ts";
 
 {
-    await Deno.create(
-        fromFileUrl(
-            new URL("../../app.log", import.meta.url)
-        ).replaceAll("\\", "/")
-    );
+    await Deno.create(BASE_DIR + "/app.log");
 }
 
 logger.setup({
@@ -32,5 +28,9 @@ logger.setup({
         }
     }
 });
+
+if (Deno.args.includes("--debug")) {
+    logger.getLogger().level = logger.getLevelByName("DEBUG");
+}
 
 export default logger;

@@ -3,7 +3,10 @@ import CasaTramwayGTFS from "./src/CasaTramwayGTFS.ts";
 if (import.meta?.main) {
     const tramGtfs = new CasaTramwayGTFS();
 
-    // await tramGtfs.exportGTFSToDirectory("./gtfs");
+    // await Deno.writeTextFile("./gtfs/trips.txt", await tramGtfs.getGTFSTrips())
+    // await Deno.writeTextFile("./gtfs/shapes.txt", await tramGtfs.getGTFSShapes())
+
+    await tramGtfs.exportGTFSToDirectory("./gtfs");
     // await Deno.writeTextFile("./gtfs/frequencies.txt", await tramGtfs.getGTFSFrequencies());
     // console.log(await tramGtfs.getOrderedStops("BW1", 0));
 
