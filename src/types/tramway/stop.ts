@@ -1,4 +1,4 @@
-import { WebpackStopPoint } from "../proto/types.ts";
+import { WebpackStopPoint } from "@proto/types.ts";
 import { BasicLine, LineDest } from "./line.ts";
 import { LineName, StopPoint } from "./types.ts";
 // import { LightLine } from "./line.ts";

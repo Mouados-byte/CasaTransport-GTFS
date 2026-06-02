@@ -1,12 +1,21 @@
-import CasaTramwayGTFS from "./src/CasaTramwayGTFS.ts";
+import CasaTramwayGTFS from "@src/CasaTramwayGTFS.ts";
+import CasaBusGTFS from "@src/CasaBusGTFS.ts";
 
 if (import.meta?.main) {
     const tramGtfs = new CasaTramwayGTFS();
+    const busGtfs = new CasaBusGTFS();
+
+    await tramGtfs.exportGTFSToDirectory("./gtfs-tramway");
+    await busGtfs.exportGTFSToDirectory("./gtfs-bus");
+
+    // const shapesIDs = await busGtfs.getShapesIDs();
+
+    // console.log((await busGtfs.getTimetable("43", "0:TERMINUS DOHA_")).data)
 
     // await Deno.writeTextFile("./gtfs/trips.txt", await tramGtfs.getGTFSTrips())
     // await Deno.writeTextFile("./gtfs/shapes.txt", await tramGtfs.getGTFSShapes())
 
-    await tramGtfs.exportGTFSToDirectory("./gtfs");
+    // await tramGtfs.exportGTFSToDirectory("./gtfs-tramway");
     // await Deno.writeTextFile("./gtfs/frequencies.txt", await tramGtfs.getGTFSFrequencies());
     // console.log(await tramGtfs.getOrderedStops("BW1", 0));
 
@@ -20,4 +29,9 @@ if (import.meta?.main) {
     // console.log(data[data.length - 3].StopName.value);
     // console.log(data[data.length - 2].StopName.value);
     // console.log(data[data.length - 1].StopName.value);
+
+    // await Deno.writeTextFile("./gtfs-bus/trips.txt", await busGtfs.exportLogWrapper("trips.txt", busGtfs.getGTFSTrips, ""));
+    // let data1 = (await busGtfs.getRouteDetails("97", 0)).data!;
+    // let data2 = (await busGtfs.getRouteDetails("97", 1)).data!;
+    // console.log(await busGtfs.getCalendarPerimeter())
 }

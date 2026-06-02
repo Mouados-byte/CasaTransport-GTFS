@@ -1,7 +1,6 @@
 import { fromFileUrl } from "deno-mod";
 
-import type { GtfsExportFileName } from "./types/types.ts";
-import type { RateLimitConfig } from "./utils/RatelimitedFetcher.ts";
+import type { RateLimitConfig } from "@utils/RatelimitedFetcher.ts";
 
 export const BASE_DIR = fromFileUrl(new URL("../", import.meta.url))
     .replaceAll("\\", '/')
@@ -18,19 +17,20 @@ export const CASATRAMWAY_ROUTE_PLANNER_URI =
 export const CASATRAMWAY_ROUTE_PLANNER_WIDGET_URI =
     "https://sim.105.prod.instant-system.com/fr/widget/place-journey-map";
 
+export const CASABUS_API_URI = "https://api.alsaalbaida.ma/api";
+export const CASABUS_GTFS_URI = "https://storageacntcasabusonly.blob.core.windows.net/gtfs";
+export const CASABUS_UMBRACO_URI = "https://web.alsaalbaida.ma/umbraco/api";
+
 export const CALENDARIFIC_API_KEY = Deno.env.get("CALENDARIFIC_API_KEY");
 
-export const GTFS_EXPORT_FILES: readonly GtfsExportFileName[] = [
-    "agency.txt",
-    "routes.txt",
-    "frequencies.txt",
-    "trips.txt",
-    "stop_times.txt",
-    "stops.txt",
-    "calendar.txt",
-    "calendar_dates.txt",
-    "feed_info.txt"
-] as const;
+export const FEED_INFO = {
+    publisherName: "SpaghettDev",
+    publisherUrl: "https://spaghettdev.me",
+    lang: "fr",
+    version: "1.0",
+    contactEmail: "spaghettdev-gtfs@gmail.com",
+    contactUrl: ""
+} as const;
 
 export const CASATRAMWAY_RATELIMIT_CONFIG: RateLimitConfig = {
     requestsPerSecond: 15,
@@ -42,6 +42,21 @@ export const CASATRAMWAY_RATELIMIT_CONFIG: RateLimitConfig = {
 export const CASATRAMWAY_ROUTE_PLANNER_RATELIMIT_CONFIG: RateLimitConfig = {
     requestsPerSecond: 10,
     requestsPerMinute: 600,
+    maxRetries: 5,
+    baseDelayMs: 1000
+};
+
+export const CASABUS_API_RATELIMIT_CONFIG: RateLimitConfig = {
+    requestsPerSecond: 8,
+    requestsPerMinute: 1000,
+    maxRetries: 5,
+    maxConcurrent: 6,
+    baseDelayMs: 1500
+};
+
+export const CASABUS_GTFS_RATELIMIT_CONFIG: RateLimitConfig = {
+    requestsPerSecond: 15,
+    requestsPerMinute: 900,
     maxRetries: 5,
     baseDelayMs: 1000
 };

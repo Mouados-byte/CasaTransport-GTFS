@@ -1,5 +1,7 @@
-import { GtfsExportBundle } from "./types/types.ts";
-import { RateLimitConfig, RateLimitedFetcher } from "./utils/RatelimitedFetcher.ts";
+import { GtfsExportBundle, GtfsExportFileName } from "@local-types/types.ts";
+import { RateLimitConfig, RateLimitedFetcher } from "@utils/RatelimitedFetcher.ts";
+
+import logger from "@utils/log.ts";
 
 export default abstract class GTFSExporter {
     public fetcher: RateLimitedFetcher;
@@ -29,10 +31,12 @@ export default abstract class GTFSExporter {
      */
     abstract getGTFSShapes(network: string): Promise<string>;
     /**
-     * Returns the GTFS frequencies.txt as a csv string.
+     * Returns the GTFS frequencies.txt as a csv string. Optional.
      * @see https://gtfs.org/documentation/schedule/reference/#frequenciestxt
      */
-    abstract getGTFSFrequencies(network: string): Promise<string>;
+    protected getGTFSFrequencies(_network: string): Promise<string> {
+        return Promise.resolve('');
+    }
     /**
      * Returns the GTFS trips.txt as a csv string.
      * @see https://gtfs.org/documentation/schedule/reference/#tripstxt
@@ -49,10 +53,12 @@ export default abstract class GTFSExporter {
      */
     abstract getGTFSCalendar(network: string): Promise<string>;
     /**
-     * Returns the GTFS calendar_dates.txt as a csv string.
+     * Returns the GTFS calendar_dates.txt as a csv string. Optional.
      * @see https://gtfs.org/documentation/schedule/reference/#calendar_datestxt
      */
-    abstract getGTFSCalendarDates(network: string): Promise<string>;
+    protected getGTFSCalendarDates(_network: string): Promise<string> {
+        return Promise.resolve('');
+    }
     /**
      * Returns the GTFS feed_info.txt as a csv string.
      * @see https://gtfs.org/documentation/schedule/reference/#feed_infotxt
@@ -69,8 +75,34 @@ export default abstract class GTFSExporter {
      * @param outputDirectory Output directory. The directory will be created if it doesn't exist.
      * @param network
      */
-    abstract exportGTFSToDirectory(outputDirectory: string, network: string): Promise<GtfsExportBundle>;
+    async exportGTFSToDirectory(
+        outputDirectory: string,
+        network: string = "",
+    ): Promise<GtfsExportBundle> {
+        const bundle = await this.getAllGTFS(network);
+        await Deno.mkdir(outputDirectory, { recursive: true });
+        await Promise.all(
+            Object.entries(bundle).map(([fileName, content]) =>
+                Deno.writeTextFile(`${outputDirectory}\\${fileName}`, content)
+            )
+        );
 
+        logger.info("Done exporting GTFS files to directory:", outputDirectory);
+
+        return bundle;
+    }
+
+
+    protected async exportLogWrapper(
+        fileName: GtfsExportFileName,
+        promise: (n: string) => Promise<string>,
+        network: string
+    ): Promise<string> {
+        logger.info(`Genering GTFS ${fileName}...`);
+        const content = await promise.call(this, network);
+        logger.info(`Done generating ${fileName}`);
+        return content;
+    }
 
     protected csvEscape(value: unknown): string {
         const stringValue =

@@ -1,9 +1,9 @@
 import {
-    TransportMode, TransportCategory, LineNumber,
-    AgencyType, BooleanString, TransportType,
-    IScheduleStopTime, LineName,
-    boolStrToBool,
+    TransportCategory, LineNumber,
+    AgencyType, BooleanString, IScheduleStopTime,
+    LineName, boolStrToBool,
 } from "./types.ts";
+import { TransportMode, TransportType } from "@local-types/types.ts";
 
 // some types taken from casatramway.ma
 

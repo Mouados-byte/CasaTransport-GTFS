@@ -2,8 +2,8 @@ import { RateLimitedFetcher } from "./RatelimitedFetcher.ts";
 import {
     OverpassResponse, OverpassWay,
     OverpassNode, OverpassRelation
-} from "../types/osm.ts";
-import { LineName } from "../types/types.ts";
+} from "@local-types/osm.ts";
+import { LineName } from "@tram-types/types.ts";
 import {
     CACHE_DIRECTORY,
     OSM_RATELIMIT_CONFIG,
@@ -198,20 +198,20 @@ export default class OSMFetcher {
     private normalizeTerminalName = (s: string): string => {
         return s
             .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "") // strip diacritics
+            .replace(/[\u0300-\u036f]/g, '') // strip diacritics
             .toLowerCase()
             .replace(/\(terminus\)/gi, " terminus") // "(Terminus)" → "terminus"
             .replace(/terminus\s+arriv[eé]e?/gi, "terminus") // "Terminus Arrivée" → "terminus"
-            .replace(/\s+/g, " ")
+            .replace(/\s+/g, ' ')
             .replace(/\bal\b/gi, "el") // OSM returns e.g. "Hay Al Wahda" instead of "Hay El Wahda"
             .trim();
     }
 
     private coreTerminalName = (normalized: string): string => {
         return normalized
-            .replace(/\bterminusb\b/gi, "") // won't match, use below
-            .replace(/\bterminus\b/gi, "")
-            .replace(/\s+/g, " ")
+            .replace(/\bterminusb\b/gi, '') // won't match, use below
+            .replace(/\bterminus\b/gi, '')
+            .replace(/\s+/g, ' ')
             .trim();
     }
 

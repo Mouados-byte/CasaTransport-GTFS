@@ -1,42 +1,41 @@
-import { RateLimitConfig, RateLimitedFetcher } from "./utils/RatelimitedFetcher.ts";
-import Line, { ILineWithStopTimes } from "./types/line.ts";
+import { RateLimitConfig, RateLimitedFetcher } from "@utils/RatelimitedFetcher.ts";
+import Line, { ILineWithStopTimes } from "@tram-types/line.ts";
+import type { GtfsExportBundle } from "@local-types/types.ts";
+import { HolidaysSundaysCache } from "@local-types/calendarific.ts";
 import {
     GtfsData, StopPoint, CalendarPerimeter, DeparturesOptions,
-    ComputedTime, Destination, DiscoveryResponse, GtfsExportBundle,
-    LineNumber, TStopDepartures, GtfsProtoData, IScheduleStopTime,
-    LineFrequency, RoutePlannerResponse, LineName,
-    GtfsExportFileName
-} from "./types/types.ts";
+    ComputedTime, Destination, DiscoveryResponse, LineNumber,
+    TStopDepartures, GtfsProtoData, IScheduleStopTime,
+    LineFrequency, RoutePlannerResponse, LineName
+} from "@tram-types/types.ts";
 import GTFSExporter from "./GTFSExporter.ts";
 import {
     CASATRAMWAY_GTFS_URI, CASATRAMWAY_RATELIMIT_CONFIG,
     CASATRAMWAY_ROUTE_PLANNER_RATELIMIT_CONFIG,
     CASATRAMWAY_ROUTE_PLANNER_URI,
-    GTFS_EXPORT_FILES
+    FEED_INFO
 } from "./constants.ts";
-import { TimeBasedValue } from "./utils/TimeRange.ts";
+import { TimeBasedValue } from "@utils/TimeRange.ts";
 
-// @deno-types="./proto/orchestraProto.d.ts"
-import { proto } from "./proto/orchestraProto.js";
+// @deno-types="@proto/orchestraProto.d.ts"
+import { proto } from "@proto/orchestraProto.js";
 import {
     ProtoClassConstructor, ProtoClasses,
     ProtoStopFromStopPoint
-} from "./proto/types.ts";
+} from "@proto/types.ts";
 import {
     dateToCasaTramwayDate,
     toGtfsDate, getHolidaysSundaysCache,
     getClosestSaturday, getClosestWeekday,
+    getClosestSunday,
     minutesToTime,
     moveArrayElement, 
     normalizeStopName,
     getRoutePlannerSessionCookie,
-    HolidaysSundaysCache,
-    getClosestSunday,
     haversineDistance
-} from "./utils/utils.ts";
+} from "@utils/utils.ts";
 
-import logger from "./utils/log.ts"
-import OSMFetcher from "./utils/OSMFetcher.ts";
+import OSMFetcher from "@utils/OSMFetcher.ts";
 
 export default class CasaTramwayGTFS extends GTFSExporter {
     private static gtfsHolidays: HolidaysSundaysCache;
@@ -49,8 +48,7 @@ export default class CasaTramwayGTFS extends GTFSExporter {
         routePlannerRatelimitConfig: RateLimitConfig =
             CASATRAMWAY_ROUTE_PLANNER_RATELIMIT_CONFIG,
         private readonly gtfsUri: string = CASATRAMWAY_GTFS_URI,
-        private readonly routePlannerUri: string = CASATRAMWAY_ROUTE_PLANNER_URI,
-        private readonly encodeUriPath: boolean = false
+        private readonly routePlannerUri: string = CASATRAMWAY_ROUTE_PLANNER_URI
     ) {
         super(ratelimitConfig);
         this.routePlannerFetcher = new RateLimitedFetcher(routePlannerRatelimitConfig);
@@ -60,10 +58,7 @@ export default class CasaTramwayGTFS extends GTFSExporter {
         const normalized = pathAndQuery.startsWith("/")
             ? pathAndQuery
             : `/${pathAndQuery}`;
-        const path = this.encodeUriPath
-            ? encodeURIComponent(normalized)
-            : normalized;
-        return `${this.gtfsUri}${path}`;
+        return `${this.gtfsUri}${normalized}`;
     }
 
     private async fetchJson<T>(
@@ -108,15 +103,6 @@ export default class CasaTramwayGTFS extends GTFSExporter {
 
             CasaTramwayGTFS.gtfsHolidays = holidays;
         }
-    }
-
-    private formatSecondsFromMinutes(totalMinutes: number): string {
-        const minutesInDay = 24 * 60;
-        const wrapped =
-            ((totalMinutes % minutesInDay) + minutesInDay) % minutesInDay;
-        const h = Math.floor(wrapped / 60);
-        const m = wrapped % 60;
-        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
     }
 
     private unwrapItems<T>(payload: DiscoveryResponse<T>, ctor?: new (obj: object) => T): T[] {
@@ -795,7 +781,7 @@ export default class CasaTramwayGTFS extends GTFSExporter {
         );
     }
 
-    async getGTFSFrequencies(network: string = ""): Promise<string> {
+    override async getGTFSFrequencies(network: string = ""): Promise<string> {
         await this.ensureHolidaysCache();
         const allHolidays = [
             ...CasaTramwayGTFS.gtfsHolidays.holidays,
@@ -903,7 +889,7 @@ export default class CasaTramwayGTFS extends GTFSExporter {
                 ...lineDestToRow(line, "SATURDAY"),
                 ...lineDestToRow(line, "SUNDAY_HOLIDAY"),
             ])
-        )
+        );
     }
 
     async getGTFSStopTimes(network: string = ""): Promise<string> {
@@ -936,7 +922,7 @@ export default class CasaTramwayGTFS extends GTFSExporter {
                     for (let i = 0; i < stops.length; i++) {
                         const stop = stops[i];
                         const minutes = BASE_MINUTES + i * (SECONDS_PER_STOP / 60);
-                        const time = this.formatSecondsFromMinutes(minutes);
+                        const time = minutesToTime(minutes, true);
                         rows.push([
                             tripId,
                             time,
@@ -991,7 +977,7 @@ export default class CasaTramwayGTFS extends GTFSExporter {
         );
     }
 
-    async getGTFSCalendarDates(_network: string = ""): Promise<string> {
+    override async getGTFSCalendarDates(_network: string = ""): Promise<string> {
         await this.ensureHolidaysCache();
 
         return this.toCsv(
@@ -1024,41 +1010,34 @@ export default class CasaTramwayGTFS extends GTFSExporter {
                 "feed_contact_url"
             ] as const,
             [[
-                "SpaghettDev",
-                "https://spaghettdev.me",
-                "fr",
+                FEED_INFO.publisherName,
+                FEED_INFO.publisherUrl,
+                FEED_INFO.lang,
                 start,
                 end,
-                "1.0",
-                "spaghettdev-gtfs@gmail.com",
-                "https://spaghettdev.me"
+                FEED_INFO.version,
+                FEED_INFO.contactEmail,
+                FEED_INFO.contactUrl
             ]]
-        )
+        );
     }
 
     async getAllGTFS(network: string = ""): Promise<GtfsExportBundle> {
-        const logWrapper = async (fileName: GtfsExportFileName, promise: (n: string) => Promise<string>) => {
-            logger.info(`Genering GTFS ${fileName}...`);
-            const content = await promise.call(this, network);
-            logger.info(`Done generating ${fileName}`);
-            return content;
-        };
-
         const [
             agency, routes, frequencies, trips,
             shapes, stopTimes, stops, calendar,
             calendarDates, feedInfo
         ] = await Promise.all([
-            logWrapper("agency.txt", this.getGTFSAgency),
-            logWrapper("routes.txt", this.getGTFSRoutes),
-            logWrapper("frequencies.txt", this.getGTFSFrequencies),
-            logWrapper("trips.txt", this.getGTFSTrips),
-            logWrapper("shapes.txt", this.getGTFSShapes),
-            logWrapper("stop_times.txt", this.getGTFSStopTimes),
-            logWrapper("stops.txt", this.getGTFSStops),
-            logWrapper("calendar.txt", this.getGTFSCalendar),
-            logWrapper("calendar_dates.txt", this.getGTFSCalendarDates),
-            logWrapper("feed_info.txt", this.getGTFSFeedInfo)
+            this.exportLogWrapper("agency.txt", this.getGTFSAgency, network),
+            this.exportLogWrapper("routes.txt", this.getGTFSRoutes, network),
+            this.exportLogWrapper("frequencies.txt", this.getGTFSFrequencies, network),
+            this.exportLogWrapper("trips.txt", this.getGTFSTrips, network),
+            this.exportLogWrapper("shapes.txt", this.getGTFSShapes, network),
+            this.exportLogWrapper("stop_times.txt", this.getGTFSStopTimes, network),
+            this.exportLogWrapper("stops.txt", this.getGTFSStops, network),
+            this.exportLogWrapper("calendar.txt", this.getGTFSCalendar, network),
+            this.exportLogWrapper("calendar_dates.txt", this.getGTFSCalendarDates, network),
+            this.exportLogWrapper("feed_info.txt", this.getGTFSFeedInfo, network)
         ]);
 
         return {
@@ -1073,22 +1052,5 @@ export default class CasaTramwayGTFS extends GTFSExporter {
             "calendar_dates.txt": calendarDates,
             "feed_info.txt": feedInfo
         };
-    }
-
-    async exportGTFSToDirectory(
-        outputDirectory: string,
-        network: string = "",
-    ): Promise<GtfsExportBundle> {
-        const bundle = await this.getAllGTFS(network);
-        await Deno.mkdir(outputDirectory, { recursive: true });
-        await Promise.all(
-            GTFS_EXPORT_FILES.map((fileName) =>
-                Deno.writeTextFile(`${outputDirectory}\\${fileName}`, bundle[fileName])
-            )
-        );
-
-        logger.info("Done exporting GTFS files to directory:", outputDirectory);
-
-        return bundle;
     }
 }

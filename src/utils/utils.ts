@@ -4,53 +4,15 @@ import {
     CALENDARIFIC_API_KEY,
     CASATRAMWAY_ROUTE_PLANNER_WIDGET_URI
 } from "../constants.ts";
-
-interface ICalendarificResponse {
-    meta: {
-        code: number;
-        error_type?: string;
-        error_detail?: string;
-    }
-    response: {
-        holidays?: Array<{
-            name: string;
-            description: string;
-            country: {
-                id: string;
-                name: string;
-            };
-            date: {
-                iso: string
-                datetime: {
-                    year: number;
-                    month: number;
-                    day: number;
-                };
-            };
-            type: string[];
-            primary_type: string;
-            canonical_url: string;
-            locations: string;
-            states: string;
-        }>;
-    };
-}
-
-/**
- * String in YYYYMMDD format
- */
-export type GtfsDate = string & { __brand: "GtfsDate" };
-export interface HolidaysSundaysCache {
-    holidays: GtfsDate[];
-    sundays: GtfsDate[];
-}
+import { ICalendarificResponse, HolidaysSundaysCache } from "@local-types/calendarific.ts";
+import { GtfsDate, TransformKeysUncapitalize } from "@local-types/types.ts";
 
 export const dateToCasaTramwayDate = (date: Date): string => {
-    return date.toISOString().split("T")[0];
+    return date.toISOString().split('T')[0];
 }
 
 export const toGtfsDate = (isoDate: string): GtfsDate => {
-    return isoDate.replaceAll("-", "") as GtfsDate;
+    return isoDate.replaceAll('-', '') as GtfsDate;
 }
 
 export const dateToGtfsDate = (date: Date): GtfsDate => {
@@ -67,10 +29,10 @@ export const dateFromGtfsDate = (gtfsDate: GtfsDate): Date => {
     );
 }
 
-export const minutesToTime = (minutes: number): string => {
+export const minutesToTime = (minutes: number, withSeconds: boolean = false): string => {
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;
-    return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+    return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}${withSeconds ? ":00" : ''}`;
 }
 
 export const moveArrayElement = <T>(arr: T[], fromIdx: number, toIdx: number): void => {
@@ -107,6 +69,49 @@ export const safeGet = <T extends object, K extends keyof T = keyof T>(
     return key in obj ? obj[key as K] : undefined;
 }
 
+export const deduplicateByKey = <T, K extends keyof T>(arr: T[], key: K): T[] => {
+    const seen = new Map<T[K], T>();
+
+    for (const item of arr) {
+        if (!seen.has(item[key])) {
+            seen.set(item[key], item);
+        }
+    }
+
+    return Array.from(seen.values());
+}
+
+export const deduplicateByDeepEquality = <T>(arr: T[]): T[] => {
+    const seen = new Set<string>();
+
+    return arr.filter(item => {
+        const key = JSON.stringify(item);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+// deno-lint-ignore no-explicit-any
+export const toLowerKeys = <T extends Record<string, any>>(obj: T): TransformKeysUncapitalize<T> => {
+    // deno-lint-ignore no-explicit-any
+    const result: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+        result[key.charAt(0).toLowerCase() + key.slice(1)] = value;
+    }
+    return result;
+}
+
+// deno-lint-ignore no-explicit-any
+export const fromLowerKeys = <T extends Record<string, any>>(obj: TransformKeysUncapitalize<T>): T => {
+    // deno-lint-ignore no-explicit-any
+    const result: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+        result[key.charAt(0).toUpperCase() + key.slice(1)] = value;
+    }
+    return result;
+}
+
 export const getMoroccanHolidays = async (year: number): Promise<GtfsDate[]> => {
     const url = `https://calendarific.com/api/v2/holidays?api_key=${CALENDARIFIC_API_KEY}&country=MA&year=${year}`;
 
@@ -133,7 +138,7 @@ export const getClosestWeekday = (date: Date = new Date(), exceptions: readonly 
     date.setHours(0, 0, 0, 0);
 
     while (
-        (date.getDate() === 0 || date.getDate() === 6) ||
+        (date.getDay() === 0 || date.getDay() === 6) ||
         exceptionsDates.some(ex => ex.getTime() === date.getTime())
     ) {
         date.setDate(date.getDate() + 1);
