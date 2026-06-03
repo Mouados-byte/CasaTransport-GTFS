@@ -3,7 +3,7 @@ import {
 } from "@src/constants.ts";
 import { TransformKeysUncapitalize } from "@local-types/types.ts";
 
-export /*const*/ enum RouteNumber {
+export const enum RouteNumber {
     L001 = "1",
     L005 = "5",
     L006 = "6",
