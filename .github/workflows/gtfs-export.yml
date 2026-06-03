@@ -1,0 +1,52 @@
+name: Export GTFS
+
+on:
+  schedule:
+    - cron: "0 13 * * 0" # every Sunday at 14:00 GMT+1 (13:00 UTC)
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export-gtfs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v2.x
+
+      - name: Write env file
+        run: |
+          echo "CALENDARIFIC_API_KEY=${{ secrets.CALENDARIFIC_API_KEY }}" > .env
+
+      - name: Run GTFS exporter
+        run: |
+          deno run --allow-all --env-file .env main.ts
+
+      - name: Create zip bundles
+        run: |
+          zip -j gtfs-bus.zip gtfs-bus/*.txt
+          zip -j gtfs-tramway.zip gtfs-tramway/*.txt
+          mv gtfs-bus.zip gtfs-bus/gtfs-bus.zip
+          mv gtfs-tramway.zip gtfs-tramway/gtfs-tramway.zip
+
+      - name: Commit and push artifacts
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gtfs-bus/gtfs-bus.zip gtfs-tramway/gtfs-tramway.zip
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "[skip ci] Update GTFS exports"
+          git push
