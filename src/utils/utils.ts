@@ -237,9 +237,7 @@ export const getRoutePlannerSessionCookie = async (): Promise<{ cookie: string, 
             internal: "true",
             redirection: "false"
         }).toString();
-
-        // TODO: fix random 403 (next request usually works)
-        const response = await fetch(widgetUrl, {
+        const reqBody: RequestInit = {
             headers: {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
                 Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -253,7 +251,17 @@ export const getRoutePlannerSessionCookie = async (): Promise<{ cookie: string, 
             referrer: widgetUrl.toString(),
             method: "GET",
             redirect: "follow"
-        });
+        };
+
+        let response = await fetch(widgetUrl, reqBody);
+
+        // TODO: temp
+        let retry = 0;
+        while (!response.ok && retry < 6) {
+            response = await fetch(widgetUrl, reqBody);
+            retry++;
+            await new Promise(r => setTimeout(r, 1000 * retry));
+        }
 
         if (!response.ok) {
             throw new Error(`Failed to fetch route planner widget: ${response.status} ${response.statusText}`);
