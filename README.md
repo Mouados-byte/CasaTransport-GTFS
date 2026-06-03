@@ -1,6 +1,6 @@
 # CasaTransport-GTFS
 
-GTFS exporter for busses and tramways using CasaBus/CasaTramway APIs respectively.
+GTFS exporter for buses and tramways using CasaBus/CasaTramway APIs respectively.
 
 This repository contains two main GTFS exporters:
 

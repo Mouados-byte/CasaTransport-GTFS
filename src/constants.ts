@@ -4,7 +4,7 @@ import type { RateLimitConfig } from "@utils/RatelimitedFetcher.ts";
 
 export const BASE_DIR = fromFileUrl(new URL("../", import.meta.url))
     .replaceAll("\\", '/')
-    .slice(0, -1);;
+    .slice(0, -1);
 export const CACHE_DIRECTORY = `${BASE_DIR}/cache`;
 
 // ensure cache directory exists
@@ -28,7 +28,7 @@ export const FEED_INFO = {
     publisherUrl: "https://spaghettdev.me",
     lang: "fr",
     version: "1.0",
-    contactEmail: "spaghettdev-gtfs@gmail.com",
+    contactEmail: "spaghettdev.gtfs@gmail.com",
     contactUrl: ""
 } as const;
 

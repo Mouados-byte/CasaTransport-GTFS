@@ -21,5 +21,6 @@ mapped@www.casabus.ma/
 # logs
 /app.log
 
-# GTFS output
-gtfs-*/
+# GTFS output files (except zip)
+gtfs-*/*
+!gtfs-*/*.zip

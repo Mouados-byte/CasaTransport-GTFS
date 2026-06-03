@@ -262,9 +262,9 @@ export default class CasaBusGTFS extends GTFSExporter {
     @Cache
     async getShapesIDs(): Promise<{ [key in RouteID]: [RoutePolyline[], RoutePolyline[]] }> {
         const shapesIDs: { [key in RouteID]: [RoutePolyline[], RoutePolyline[]] } = {} as typeof shapesIDs;
-        const busses = await this.getBusList();
+        const buses = await this.getBusList();
 
-        for (const bus of busses.data!.busList) {
+        for (const bus of buses.data!.busList) {
             const routePolylinesDir0 = (await this.getRoutePolyline(bus.routeId, 0))
                 .data!.routePolylines;
             const routePolylinesDir1 = (await this.getRoutePolyline(bus.routeId, 1))
