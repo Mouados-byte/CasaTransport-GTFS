@@ -30,7 +30,7 @@ jobs:
 
       - name: Run GTFS exporter
         run: |
-          deno run --allow-all --env-file .env main.ts
+          deno run --allow-all --env-file main.ts
 
       - name: Create zip bundles
         run: |
