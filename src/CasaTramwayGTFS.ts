@@ -68,9 +68,19 @@ export default class CasaTramwayGTFS extends GTFSExporter {
         useRoutePlannerURI?: boolean
     ): Promise<T> {
         const url = useRoutePlannerURI ? pathAndQuery : this.makeApiUrl(pathAndQuery);
-        const response = await (useRoutePlannerURI ? this.routePlannerFetcher : this.fetcher)
+        let response = await (useRoutePlannerURI ? this.routePlannerFetcher : this.fetcher)
             .fetchRaw(url, reqParams);
         let responseJson: object | false;
+
+        // TODO: temp
+        if (useRoutePlannerURI) {
+            let retry = 0;
+            while (!response.ok && retry < 6) {
+                await new Promise(r => setTimeout(r, 1000 * (retry + 1)));
+                response = await this.routePlannerFetcher.fetchRaw(url, reqParams);
+                retry++;
+            }
+        }
 
         // all /phtv/get endpoints return 200 with body "false" if the request is invalid
         if (!response.ok || (responseJson = await response.json()) === false) {

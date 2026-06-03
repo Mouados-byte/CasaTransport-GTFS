@@ -258,9 +258,9 @@ export const getRoutePlannerSessionCookie = async (): Promise<{ cookie: string, 
         // TODO: temp
         let retry = 0;
         while (!response.ok && retry < 6) {
+            await new Promise(r => setTimeout(r, 1000 * (retry + 1)));
             response = await fetch(widgetUrl, reqBody);
             retry++;
-            await new Promise(r => setTimeout(r, 1000 * retry));
         }
 
         if (!response.ok) {
