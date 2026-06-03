@@ -6,6 +6,7 @@ import {
 import { LineName } from "@tram-types/types.ts";
 import {
     CACHE_DIRECTORY,
+    FEED_INFO,
     OSM_RATELIMIT_CONFIG,
     OSM_SHAPES_URI
 } from "../constants.ts";
@@ -47,7 +48,7 @@ export default class OSMFetcher {
                     headers: {
                         Accept: "application/json",
                         "Content-Type": "application/x-www-form-urlencoded",
-                        "User-Agent": "CasaTransportGTFS/1.0"
+                        "User-Agent": FEED_INFO.userAgent
                     }
                 }
             );

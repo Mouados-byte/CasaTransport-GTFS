@@ -24,6 +24,11 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Debug network info
+        run: |
+          curl -s https://httpbin.org/headers
+          curl -s https://httpbin.org/ip
+
       - name: Write env file
         run: |
           echo "CALENDARIFIC_API_KEY=${{ secrets.CALENDARIFIC_API_KEY }}" > .env

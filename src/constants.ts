@@ -29,7 +29,8 @@ export const FEED_INFO = {
     lang: "fr",
     version: "1.0",
     contactEmail: "spaghettdev.gtfs@gmail.com",
-    contactUrl: ""
+    contactUrl: "",
+    userAgent: "CasaTransportGTFS/1.0 (spaghettdev.gtfs@gmail.com)"
 } as const;
 
 export const CASATRAMWAY_RATELIMIT_CONFIG: RateLimitConfig = {
