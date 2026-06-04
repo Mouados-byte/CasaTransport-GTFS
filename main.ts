@@ -1,12 +1,12 @@
-import CasaTramwayGTFS from "@src/CasaTramwayGTFS.ts";
 import CasaBusGTFS from "@src/CasaBusGTFS.ts";
+import CasaTramwayGTFS from "@src/CasaTramwayGTFS.ts";
 
 if (import.meta?.main) {
-    const tramGtfs = new CasaTramwayGTFS();
     const busGtfs = new CasaBusGTFS();
+    const tramGtfs = new CasaTramwayGTFS();
 
-    await tramGtfs.exportGTFSToDirectory("./gtfs-tramway");
     await busGtfs.exportGTFSToDirectory("./gtfs-bus");
+    await tramGtfs.exportGTFSToDirectory("./gtfs-tramway");
 
     // const shapesIDs = await busGtfs.getShapesIDs();
 
