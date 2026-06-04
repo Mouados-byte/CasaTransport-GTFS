@@ -24,17 +24,17 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Debug network info
-        run: |
-          curl -s https://httpbin.org/headers
-          curl -s https://httpbin.org/ip
-
       - name: Write env file
         run: |
           echo "CALENDARIFIC_API_KEY=${{ secrets.CALENDARIFIC_API_KEY }}" > .env
 
       - name: Run GTFS exporter
         run: |
+          PROXY=$(curl -s -L https://www.sslproxies.org/ | grep -oP '\d+\.\d+\.\d+\.\d+:\d+' | head -1)
+
+          export HTTP_PROXY="http://$PROXY"
+          export HTTPS_PROXY="http://$PROXY"
+
           deno run --allow-all --env-file main.ts
 
       - name: Create zip bundles
