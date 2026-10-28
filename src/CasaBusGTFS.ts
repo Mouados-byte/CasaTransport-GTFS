@@ -666,7 +666,7 @@ export default class CasaBusGTFS extends GTFSExporter {
             }
         }
         if (unpriced.size) {
-            logger.warn("No published fare for routes:", [...unpriced].join(", "));
+            logger.warn(`No published fare for routes: ${[...unpriced].join(", ")}`);
         }
 
         return this.toCsv(["fare_id", "route_id"] as const, rows);
