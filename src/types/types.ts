@@ -21,7 +21,10 @@ export type GtfsRequiredExportFileName =
 
 export type GtfsOptionalExportFileName =
     | "frequencies.txt"
-    | "calendar_dates.txt";
+    | "calendar_dates.txt"
+    | "fare_attributes.txt"
+    | "fare_rules.txt"
+    | "transfers.txt";
 
 export type GtfsExportFileName =
     | GtfsRequiredExportFileName

@@ -205,6 +205,7 @@ export interface RoutePlannerLeg {
     mode: "WALK" | "TRAM" | "BUS";
     start: RoutePlannerDestination;
     end: RoutePlannerDestination;
+    duration: number; // seconds
     stoppoints: RoutePlannerStopPoint[];
 };
 

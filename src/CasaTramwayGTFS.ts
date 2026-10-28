@@ -32,7 +32,9 @@ import {
     moveArrayElement, 
     normalizeStopName,
     getRoutePlannerSessionCookie,
-    haversineDistance
+    haversineDistance,
+    interpolateStopOffsets,
+    secondsToTime
 } from "@utils/utils.ts";
 
 import OSMFetcher from "@utils/OSMFetcher.ts";
@@ -442,6 +444,19 @@ export default class CasaTramwayGTFS extends GTFSExporter {
         onlyPhysicals?: boolean,
         network: string = ""
     ): Promise<StopPoint<true>[]> {
+        return (await this.getOrderedStopsAndDuration(line, direction, onlyPhysicals, network)).stops;
+    }
+
+    /**
+     * Ordered stops of a line direction, plus the terminal-to-terminal travel time in seconds
+     * that the Casatramway route planner reports for the first morning departure.
+     */
+    async getOrderedStopsAndDuration(
+        line: LineName,
+        direction: 0 | 1,
+        onlyPhysicals?: boolean,
+        network: string = ""
+    ): Promise<{ stops: StopPoint<true>[], durationSecs: number }> {
         const { lines, stops: allStops } = await this.getInitData(undefined, onlyPhysicals, network);
         const lineStops = await this.getLineStops(line, direction, onlyPhysicals, network);
 
@@ -509,8 +524,9 @@ export default class CasaTramwayGTFS extends GTFSExporter {
             },
             referrer: "https://www.casatramway.ma/"
         }, true);
-        const routeStopPoints = route.response.tripPlanner.TRANSPORT
-            .groups[0].results.journeys[0].paths.filter(leg => leg.mode !== "WALK")[0].stoppoints;
+        const routeLeg = route.response.tripPlanner.TRANSPORT
+            .groups[0].results.journeys[0].paths.filter(leg => leg.mode !== "WALK")[0];
+        const routeStopPoints = routeLeg.stoppoints;
 
         const sortedStops = lineStops.sort((a, b) => {
             const aIdx = routeStopPoints.findIndex(sp => sp.id.split(':')[1] === a.StopPointRef);
@@ -533,7 +549,7 @@ export default class CasaTramwayGTFS extends GTFSExporter {
             -1
         );
 
-        return sortedStops;
+        return { stops: sortedStops, durationSecs: routeLeg.duration };
     }
 
 
@@ -911,36 +927,45 @@ export default class CasaTramwayGTFS extends GTFSExporter {
             /* stop_id: */ string,
             /* stop_sequence: */ number,
             /* pickup_type: */ number,
-            /* drop_off_type: */ number
+            /* drop_off_type: */ number,
+            /* timepoint: */ number
         ][] = [];
 
-        const BASE_MINUTES = 5 * 60;
-        const SECONDS_PER_STOP = 60;
+        // trips are frequency based, so stop times only carry offsets from the first departure
+        const BASE_SECONDS = 5 * 60 * 60;
 
         for (const line of Object.values(lines)) {
             for (const dest of line.destinations) {
                 // NOTE: could fetch stops once and reverse for other direction
                 // but maybe in the future lines could have different stops per direction
                 const direction = dest.destinationDir;
-                const stops = await this.getOrderedStops(line.lineRef, direction, undefined, network);
+                const { stops, durationSecs } = await this.getOrderedStopsAndDuration(
+                    line.lineRef, direction, undefined, network
+                );
                 if (!stops.length) continue;
+
+                // the route planner only gives the terminal-to-terminal time, so intermediate
+                // stops are interpolated by distance and marked as approximate (timepoint 0)
+                const offsets = interpolateStopOffsets(
+                    stops.map(s => [Number(s.Location.Latitude), Number(s.Location.Longitude)]),
+                    durationSecs
+                );
 
                 const serviceSuffixes = ["WEEKDAY", "SATURDAY", "SUNDAY_HOLIDAY"] as const;
                 for (const suffix of serviceSuffixes) {
                     const tripId = `${line.lineRef}_${direction}_${suffix}` as const;
 
                     for (let i = 0; i < stops.length; i++) {
-                        const stop = stops[i];
-                        const minutes = BASE_MINUTES + i * (SECONDS_PER_STOP / 60);
-                        const time = minutesToTime(minutes, true);
+                        const time = secondsToTime(BASE_SECONDS + offsets[i]);
                         rows.push([
                             tripId,
                             time,
                             time,
-                            stop.StopPointRef,
+                            stops[i].StopPointRef,
                             i + 1,
                             0,
-                            0
+                            0,
+                            i === 0 || i === stops.length - 1 ? 1 : 0
                         ]);
                     }
                 }
@@ -956,6 +981,7 @@ export default class CasaTramwayGTFS extends GTFSExporter {
                 "stop_sequence",
                 "pickup_type",
                 "drop_off_type",
+                "timepoint"
             ] as const,
             rows
         );

@@ -35,7 +35,28 @@ export const minutesToTime = (minutes: number, withSeconds: boolean = false): st
     return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}${withSeconds ? ":00" : ''}`;
 }
 
-export const moveArrayElement = <T>(arr: T[], fromIdx: number, toIdx: number): void => {
+export const secondsToTime = (seconds: number): string => {
+    const s = Math.round(seconds);
+    return [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60]
+        .map(v => String(v).padStart(2, '0'))
+        .join(':');
+}
+
+/**
+ * Spreads a measured end-to-end travel time over the stops in proportion to the straight-line
+ * distance between consecutive stops. Returns the offset in seconds of each stop from the first.
+ */
+export const interpolateStopOffsets = (coords: [number, number][], totalSeconds: number): number[] => {
+    const offsets = [0];
+    for (let i = 1; i < coords.length; i++) {
+        offsets.push(offsets[i - 1] + haversineDistance(...coords[i - 1], ...coords[i]));
+    }
+    const totalDistance = offsets[offsets.length - 1];
+
+    return offsets.map(d => totalDistance > 0 ? Math.round(d / totalDistance * totalSeconds) : 0);
+}
+
+export const moveArrayElement =<T>(arr: T[], fromIdx: number, toIdx: number): void => {
     const elem = arr[fromIdx];
 
     if (toIdx < 0) toIdx = arr.length + toIdx;
