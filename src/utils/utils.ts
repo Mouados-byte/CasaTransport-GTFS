@@ -6,6 +6,7 @@ import {
 } from "../constants.ts";
 import { ICalendarificResponse, HolidaysSundaysCache } from "@local-types/calendarific.ts";
 import { GtfsDate, TransformKeysUncapitalize } from "@local-types/types.ts";
+import logger from "./log.ts";
 
 export const dateToCasaTramwayDate = (date: Date): string => {
     return date.toISOString().split('T')[0];
@@ -154,6 +155,11 @@ export const fromLowerKeys = <T extends Record<string, any>>(obj: TransformKeysU
 }
 
 export const getMoroccanHolidays = async (year: number): Promise<GtfsDate[]> => {
+    if (!CALENDARIFIC_API_KEY) {
+        logger.warn("CALENDARIFIC_API_KEY is not set, exporting without national holidays");
+        return [];
+    }
+
     const url = `https://calendarific.com/api/v2/holidays?api_key=${CALENDARIFIC_API_KEY}&country=MA&year=${year}`;
 
     const response = await fetch(url);
@@ -243,7 +249,10 @@ export const getHolidaysSundaysCache = async (): Promise<HolidaysSundaysCache> =
             sundays: filteredSundays.sort()
         });
 
-        await Deno.writeTextFile(filepath, JSON.stringify(allHolidays, null, 4));
+        // an empty list means no API key, so ask again next run instead of caching it
+        if (holidays.length) {
+            await Deno.writeTextFile(filepath, JSON.stringify(allHolidays, null, 4));
+        }
     }
 
     return allHolidays;
