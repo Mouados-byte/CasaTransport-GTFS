@@ -92,6 +92,26 @@ export const deduplicateByDeepEquality = <T>(arr: T[]): T[] => {
     });
 }
 
+// A stop served by both directions (usually a terminus) returns every trip passing through it,
+// so a trip also lands in the opposite direction as a 1-2 stop ghost with that direction's
+// stop sequences. Keep each trip only in the direction where it has the most stops.
+export const dropOppositeDirectionTrips = <T extends { tripId: string }>(
+    byDir: { 0: T[], 1: T[] }
+): { 0: T[], 1: T[] } => {
+    const count = (entries: T[]) => {
+        const counts = new Map<string, number>();
+        for (const e of entries) counts.set(e.tripId, (counts.get(e.tripId) ?? 0) + 1);
+        return counts;
+    };
+    const counts0 = count(byDir[0]);
+    const counts1 = count(byDir[1]);
+
+    return {
+        0: byDir[0].filter(e => counts0.get(e.tripId)! >= (counts1.get(e.tripId) ?? 0)),
+        1: byDir[1].filter(e => counts1.get(e.tripId)! > (counts0.get(e.tripId) ?? 0))
+    };
+}
+
 // deno-lint-ignore no-explicit-any
 export const toLowerKeys = <T extends Record<string, any>>(obj: T): TransformKeysUncapitalize<T> => {
     // deno-lint-ignore no-explicit-any

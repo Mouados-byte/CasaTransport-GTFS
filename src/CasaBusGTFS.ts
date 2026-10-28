@@ -22,6 +22,7 @@ import {
     dateToGtfsDate,
     deduplicateByDeepEquality,
     deduplicateByKey,
+    dropOppositeDirectionTrips,
     getClosestSaturday, getClosestSunday, getClosestWeekday
 } from "@utils/utils.ts";
 import { fixCBStopName } from "@utils/CBStopNameFix.ts";
@@ -353,6 +354,10 @@ export default class CasaBusGTFS extends GTFSExporter {
         }
 
         await Promise.all(tasks);
+
+        for (const routeName of Object.keys(timetables) as RouteName[]) {
+            timetables[routeName] = dropOppositeDirectionTrips(timetables[routeName]);
+        }
 
         return timetables;
     }
