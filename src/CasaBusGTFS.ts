@@ -100,6 +100,8 @@ export default class CasaBusGTFS extends GTFSExporter {
         return ctor ? new ctor(responseJson) : responseJson as T;
     }
 
+    private tripKey = (entry: TimetableEntry, dir: 0 | 1) => `${entry.serviceType}_${entry.tripId}-${dir}`;
+
     private isRouteName = (l: RouteID | RouteName): l is RouteName => {
         return l.startsWith("L");
     }
@@ -522,13 +524,15 @@ export default class CasaBusGTFS extends GTFSExporter {
             for (const [dirStr, timetableEntries] of Object.entries(routeTimetables)) {
                 const dir = parseInt(dirStr) as 0 | 1;
 
-                for (const tripID of new Set(timetableEntries.map(e => e.tripId))) {
-                    const trip = timetableEntries.find(e => e.tripId === tripID)!;
+                // the API can return the same trip ids for the weekday, Saturday and Sunday dates,
+                // so a trip is one (trip id, service type) pair
+                const trips = new Map(timetableEntries.map(e => [this.tripKey(e, dir), e]));
 
+                for (const [tripKey, trip] of trips) {
                     rows.push([
                         routeName,
                         `SVC_${trip.serviceType}`,
-                        `${trip.tripId}-${dir}`,
+                        tripKey,
                         fixCBStopName(trip.arrivalStopId, trip.arrivalStop),
                         "",
                         dir,
@@ -568,7 +572,8 @@ export default class CasaBusGTFS extends GTFSExporter {
             /* stop_id: */ number,
             /* stop_sequence: */ number,
             /* pickup_type: */ number,
-            /* drop_off_type: */ number
+            /* drop_off_type: */ number,
+            /* timepoint: */ number
         ][] = [];
 
         for (const [_, routeTimetables] of Object.entries(timetables)) {
@@ -579,13 +584,14 @@ export default class CasaBusGTFS extends GTFSExporter {
 
                 for (const entry of timetableEntries) {
                     rows.push([
-                        `${entry.tripId}-${dir}`,
+                        this.tripKey(entry, dir),
                         entry.arrivalTime,
                         entry.departureTime,
                         this.stopIDStrToID(entry.stopId),
                         parseInt(entry.stopSequence),
                         0,
-                        0
+                        0,
+                        1
                     ]);
                 }
             }
@@ -600,6 +606,7 @@ export default class CasaBusGTFS extends GTFSExporter {
                 "stop_sequence",
                 "pickup_type",
                 "drop_off_type",
+                "timepoint"
             ] as const,
             rows
         );
@@ -647,9 +654,9 @@ export default class CasaBusGTFS extends GTFSExporter {
         // ponytail: payment_method 0 (on board) and no free transfers are assumptions,
         // casabus.ma only publishes the per-line price
         return await Promise.resolve(this.toCsv(
-            ["fare_id", "price", "currency_type", "payment_method", "transfers"] as const,
+            ["fare_id", "price", "currency_type", "payment_method", "transfers", "agency_id"] as const,
             Object.keys(CASABUS_FARES_MAD).map(price => [
-                `BUS_${price}`, Number(price).toFixed(2), "MAD", 0, 0
+                `BUS_${price}`, Number(price).toFixed(2), "MAD", 0, 0, "1"
             ])
         ));
     }
