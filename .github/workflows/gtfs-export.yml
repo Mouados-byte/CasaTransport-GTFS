@@ -24,31 +24,35 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Run tests
+        run: deno test --allow-all src/
+
       - name: Write env file
         run: |
           echo "CALENDARIFIC_API_KEY=${{ secrets.CALENDARIFIC_API_KEY }}" > .env
 
+      # A random free proxy from a public list was used here before. It changed on every run and
+      # could read the traffic, so a proxy is now opt-in through the EXPORT_PROXY secret.
       - name: Run GTFS exporter
-        run: |
-          PROXY=$(curl -s -L https://www.sslproxies.org/ | grep -oP '\d+\.\d+\.\d+\.\d+:\d+' | head -1)
-
-          export HTTP_PROXY="http://$PROXY"
-          export HTTPS_PROXY="http://$PROXY"
-
-          deno run --allow-all --env-file main.ts
+        env:
+          HTTP_PROXY: ${{ secrets.EXPORT_PROXY }}
+          HTTPS_PROXY: ${{ secrets.EXPORT_PROXY }}
+        run: deno run --allow-all --env-file main.ts
 
       - name: Create zip bundles
         run: |
           zip -j gtfs-bus.zip gtfs-bus/*.txt
           zip -j gtfs-tramway.zip gtfs-tramway/*.txt
+          zip -j gtfs-casablanca.zip gtfs-casablanca/*.txt
           mv gtfs-bus.zip gtfs-bus/gtfs-bus.zip
           mv gtfs-tramway.zip gtfs-tramway/gtfs-tramway.zip
+          mv gtfs-casablanca.zip gtfs-casablanca/gtfs-casablanca.zip
 
       - name: Commit and push artifacts
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add gtfs-bus/gtfs-bus.zip gtfs-tramway/gtfs-tramway.zip
+          git add gtfs-bus/gtfs-bus.zip gtfs-tramway/gtfs-tramway.zip gtfs-casablanca/gtfs-casablanca.zip
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
