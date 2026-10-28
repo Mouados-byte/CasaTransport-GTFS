@@ -1,8 +1,14 @@
 import CasaBusGTFS from "@src/CasaBusGTFS.ts";
 import CasaTramwayGTFS from "@src/CasaTramwayGTFS.ts";
 import { mergeFeeds } from "@src/mergeFeeds.ts";
+import { incidentsToAlerts } from "@src/alerts.ts";
 
-if (import.meta?.main) {
+if (import.meta?.main && Deno.args.includes("--alerts")) {
+    // GTFS-Realtime service alerts, meant to be rerun every few minutes and served over HTTP
+    const incidents = (await new CasaBusGTFS().getIncidents()).data?.busLiveList ?? [];
+    await Deno.mkdir("./gtfs-rt", { recursive: true });
+    await Deno.writeFile("./gtfs-rt/alerts.pb", incidentsToAlerts(incidents, "bus:"));
+} else if (import.meta?.main) {
     const busGtfs = new CasaBusGTFS();
     const tramGtfs = new CasaTramwayGTFS();
 

@@ -24,3 +24,4 @@ mapped@www.casabus.ma/
 # GTFS output files (except zip)
 gtfs-*/*
 !gtfs-*/*.zip
+gtfs-rt/
