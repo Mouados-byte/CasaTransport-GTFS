@@ -83,7 +83,7 @@ export default abstract class GTFSExporter {
         await Deno.mkdir(outputDirectory, { recursive: true });
         await Promise.all(
             Object.entries(bundle).map(([fileName, content]) =>
-                Deno.writeTextFile(`${outputDirectory}\\${fileName}`, content)
+                Deno.writeTextFile(`${outputDirectory}/${fileName}`, content)
             )
         );
 
