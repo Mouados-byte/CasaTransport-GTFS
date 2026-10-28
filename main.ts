@@ -1,12 +1,19 @@
 import CasaBusGTFS from "@src/CasaBusGTFS.ts";
 import CasaTramwayGTFS from "@src/CasaTramwayGTFS.ts";
+import { mergeFeeds } from "@src/mergeFeeds.ts";
 
 if (import.meta?.main) {
     const busGtfs = new CasaBusGTFS();
     const tramGtfs = new CasaTramwayGTFS();
 
-    await busGtfs.exportGTFSToDirectory("./gtfs-bus");
-    await tramGtfs.exportGTFSToDirectory("./gtfs-tramway");
+    const busBundle = await busGtfs.exportGTFSToDirectory("./gtfs-bus");
+    const tramBundle = await tramGtfs.exportGTFSToDirectory("./gtfs-tramway");
+
+    const merged = mergeFeeds({ tram: tramBundle, bus: busBundle }, "tram");
+    await Deno.mkdir("./gtfs-casablanca", { recursive: true });
+    for (const [fileName, content] of Object.entries(merged)) {
+        await Deno.writeTextFile(`./gtfs-casablanca/${fileName}`, content!);
+    }
 
     // const shapesIDs = await busGtfs.getShapesIDs();
 

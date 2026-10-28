@@ -4,6 +4,7 @@
     },
     "imports": {
         "@std/assert": "jsr:@std/assert@1",
+        "@std/csv": "jsr:@std/csv@1",
         "date-fns": "npm:date-fns@^4.2.1",
         "protobufjs": "npm:protobufjs@^8.2.0",
         "deno-mod": "https://deno.land/std/path/mod.ts",
