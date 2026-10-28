@@ -206,8 +206,9 @@ export interface CasaBusIncidentsResponse {
         id: string;
         title: string;
         text: string;
-        route: RouteName;
-        routeId: RouteName; // lol
+        // not always a RouteName: live data has "L009E" for L09E
+        route: string;
+        routeId: string;
         duration: string;
         blockCreationTime: string;
         dateDebut: string;

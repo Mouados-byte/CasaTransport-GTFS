@@ -5,10 +5,15 @@ const { transit_realtime } = GtfsRealtimeBindings;
 
 type Incident = CasaBusIncidentsResponse["busLiveList"][number];
 
+// The API sends Morocco local time without an offset, and "0001-01-01T00:00:00" for "no end".
+// ponytail: fixed +01:00, wrong by an hour during Ramadan when Morocco moves to UTC+0
 const toEpoch = (date: string): number | undefined => {
-    const ms = Date.parse(date);
-    return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000);
+    const ms = Date.parse(/[zZ]|[+-]\d\d:\d\d$/.test(date) ? date : `${date}+01:00`);
+    return Number.isNaN(ms) || ms < 0 ? undefined : Math.floor(ms / 1000);
 };
+
+// Incidents write L009E where the feed route id is L09E
+const toFeedRouteId = (routeId: string) => routeId.length > 4 ? routeId.replace(/^L0/, "L") : routeId;
 
 /**
  * Converts Casabus live incidents into a GTFS-Realtime service alerts feed.
@@ -35,8 +40,9 @@ export const incidentsToAlerts = (
                 id: incident.id,
                 alert: {
                     activePeriod: start || end ? [{ start, end }] : [],
-                    informedEntity: [{ routeId: `${routePrefix}${incident.routeId || incident.route}` }],
-                    headerText: text(incident.title),
+                    informedEntity: [{ routeId: `${routePrefix}${toFeedRouteId(incident.routeId || incident.route)}` }],
+                    // titles are only "Perturbation sur: ", the place is in the text
+                    headerText: text(`${incident.title}${incident.text}`.trim()),
                     descriptionText: text(incident.text)
                 }
             };

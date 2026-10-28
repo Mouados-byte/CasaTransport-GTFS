@@ -64,14 +64,15 @@ export default class CasaBusGTFS extends GTFSExporter {
         apiType: APITypeName = "API"
     ): Promise<T> {
         const isGTFS = apiType === "GTFS";
+        const isGet = isGTFS || apiType === "UMBRACO";
         const url = this.makeApiUrl(this.getApiUrl(apiType), endpoint);
         const response = await (isGTFS ? this.gtfsFetcher : this.fetcher).fetchRaw(url, {
-            method: isGTFS || apiType === "UMBRACO" ? "GET" : "POST",
+            method: isGet ? "GET" : "POST",
             headers: {
                 Accept: "application/json",
                 "Content-Type": "application/json"
             },
-            body: isGTFS ? undefined : JSON.stringify(body),
+            body: isGet ? undefined : JSON.stringify(body),
             redirect: "follow"
         });
 
