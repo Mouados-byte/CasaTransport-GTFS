@@ -2,6 +2,7 @@ import { GtfsDate, GtfsExportBundle, TransportType } from "@local-types/types.ts
 import { RateLimitConfig, RateLimitedFetcher } from "@utils/RatelimitedFetcher.ts";
 import {
     CASABUS_GTFS_RATELIMIT_CONFIG, CASABUS_API_RATELIMIT_CONFIG,
+    CASABUS_FARES_MAD,
     FEED_INFO
 } from "./constants.ts";
 import GTFSExporter from "./GTFSExporter.ts";
@@ -27,6 +28,7 @@ import {
 } from "@utils/utils.ts";
 import { fixCBStopName } from "@utils/CBStopNameFix.ts";
 import { Cache } from "@utils/CacheDecorator.ts";
+import logger from "@utils/log.ts";
 
 export default class CasaBusGTFS extends GTFSExporter {
     public gtfsFetcher: RateLimitedFetcher;
@@ -624,6 +626,35 @@ export default class CasaBusGTFS extends GTFSExporter {
         )));
     }
 
+    async getGTFSFareAttributes(_network: string = ""): Promise<string> {
+        // ponytail: payment_method 0 (on board) and no free transfers are assumptions,
+        // casabus.ma only publishes the per-line price
+        return await Promise.resolve(this.toCsv(
+            ["fare_id", "price", "currency_type", "payment_method", "transfers"] as const,
+            Object.keys(CASABUS_FARES_MAD).map(price => [
+                `BUS_${price}`, Number(price).toFixed(2), "MAD", 0, 0
+            ])
+        ));
+    }
+
+    async getGTFSFareRules(_network: string = ""): Promise<string> {
+        const routeNames = new Set(Object.keys(await this.getBusRoutes()));
+        const unpriced = new Set(routeNames);
+        const rows: [string, string][] = [];
+
+        for (const [price, routes] of Object.entries(CASABUS_FARES_MAD)) {
+            for (const route of routes.filter(r => routeNames.has(r))) {
+                rows.push([`BUS_${price}`, route]);
+                unpriced.delete(route);
+            }
+        }
+        if (unpriced.size) {
+            logger.warn("No published fare for routes:", [...unpriced].join(", "));
+        }
+
+        return this.toCsv(["fare_id", "route_id"] as const, rows);
+    }
+
     async getGTFSFeedInfo(_network: string = ""): Promise<string> {
         const { start, end } = await this.getCalendarPerimeter();
 
@@ -655,7 +686,8 @@ export default class CasaBusGTFS extends GTFSExporter {
         const [
             agency, routes, trips,
             shapes, stopTimes, stops,
-            calendar, feedInfo
+            calendar, feedInfo,
+            fareAttributes, fareRules
         ] = await Promise.all([
             this.exportLogWrapper("agency.txt", this.getGTFSAgency, network),
             this.exportLogWrapper("routes.txt", this.getGTFSRoutes, network),
@@ -664,7 +696,9 @@ export default class CasaBusGTFS extends GTFSExporter {
             this.exportLogWrapper("stop_times.txt", this.getGTFSStopTimes, network),
             this.exportLogWrapper("stops.txt", this.getGTFSStops, network),
             this.exportLogWrapper("calendar.txt", this.getGTFSCalendar, network),
-            this.exportLogWrapper("feed_info.txt", this.getGTFSFeedInfo, network)
+            this.exportLogWrapper("feed_info.txt", this.getGTFSFeedInfo, network),
+            this.exportLogWrapper("fare_attributes.txt", this.getGTFSFareAttributes, network),
+            this.exportLogWrapper("fare_rules.txt", this.getGTFSFareRules, network)
         ]);
 
         return {
@@ -675,7 +709,9 @@ export default class CasaBusGTFS extends GTFSExporter {
             "stop_times.txt": stopTimes,
             "stops.txt": stops,
             "calendar.txt": calendar,
-            "feed_info.txt": feedInfo
+            "feed_info.txt": feedInfo,
+            "fare_attributes.txt": fareAttributes,
+            "fare_rules.txt": fareRules
         };
     }
 }

@@ -13,6 +13,8 @@ import {
     CASATRAMWAY_GTFS_URI, CASATRAMWAY_RATELIMIT_CONFIG,
     CASATRAMWAY_ROUTE_PLANNER_RATELIMIT_CONFIG,
     CASATRAMWAY_ROUTE_PLANNER_URI,
+    CASATRAMWAY_SINGLE_FARE_MAD,
+    CASATRAMWAY_TRANSFER_WINDOW_SECS,
     FEED_INFO
 } from "./constants.ts";
 import { TimeBasedValue } from "@utils/TimeRange.ts";
@@ -1029,6 +1031,42 @@ export default class CasaTramwayGTFS extends GTFSExporter {
         );
     }
 
+    // GTFS fares v1 ties a fare to one agency, so tram and busway each get the same single fare
+    async getGTFSFareAttributes(network: string = ""): Promise<string> {
+        const { lines } = await this.getInitData(undefined, undefined, network);
+        const agencies = new Set(Object.values(lines).map(line => line.agencyRef));
+
+        return this.toCsv(
+            [
+                "fare_id",
+                "price",
+                "currency_type",
+                "payment_method",
+                "transfers",
+                "agency_id",
+                "transfer_duration"
+            ] as const,
+            Array.from(agencies).map(agencyId => [
+                `SINGLE_${agencyId}`,
+                CASATRAMWAY_SINGLE_FARE_MAD.toFixed(2),
+                "MAD",
+                1,
+                "",
+                agencyId,
+                CASATRAMWAY_TRANSFER_WINDOW_SECS
+            ])
+        );
+    }
+
+    async getGTFSFareRules(network: string = ""): Promise<string> {
+        const { lines } = await this.getInitData(undefined, undefined, network);
+
+        return this.toCsv(
+            ["fare_id", "route_id"] as const,
+            Object.values(lines).map(line => [`SINGLE_${line.agencyRef}`, line.lineRef])
+        );
+    }
+
     async getGTFSFeedInfo(network: string = ""): Promise<string> {
         const perimeter = await this.getCalendarPerimeter(network);
         const start = toGtfsDate(perimeter.start);
@@ -1062,7 +1100,8 @@ export default class CasaTramwayGTFS extends GTFSExporter {
         const [
             agency, routes, frequencies, trips,
             shapes, stopTimes, stops, calendar,
-            calendarDates, feedInfo
+            calendarDates, feedInfo,
+            fareAttributes, fareRules
         ] = await Promise.all([
             this.exportLogWrapper("agency.txt", this.getGTFSAgency, network),
             this.exportLogWrapper("routes.txt", this.getGTFSRoutes, network),
@@ -1073,7 +1112,9 @@ export default class CasaTramwayGTFS extends GTFSExporter {
             this.exportLogWrapper("stops.txt", this.getGTFSStops, network),
             this.exportLogWrapper("calendar.txt", this.getGTFSCalendar, network),
             this.exportLogWrapper("calendar_dates.txt", this.getGTFSCalendarDates, network),
-            this.exportLogWrapper("feed_info.txt", this.getGTFSFeedInfo, network)
+            this.exportLogWrapper("feed_info.txt", this.getGTFSFeedInfo, network),
+            this.exportLogWrapper("fare_attributes.txt", this.getGTFSFareAttributes, network),
+            this.exportLogWrapper("fare_rules.txt", this.getGTFSFareRules, network)
         ]);
 
         return {
@@ -1086,7 +1127,9 @@ export default class CasaTramwayGTFS extends GTFSExporter {
             "stops.txt": stops,
             "calendar.txt": calendar,
             "calendar_dates.txt": calendarDates,
-            "feed_info.txt": feedInfo
+            "feed_info.txt": feedInfo,
+            "fare_attributes.txt": fareAttributes,
+            "fare_rules.txt": fareRules
         };
     }
 }

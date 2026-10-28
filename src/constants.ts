@@ -68,3 +68,26 @@ export const OSM_RATELIMIT_CONFIG: RateLimitConfig = {
     maxRetries: 3,
     baseDelayMs: 1000
 };
+
+// https://www.casatramway.ma/ticket-abonnement/nos-offres (checked 2026-10-28): "8 dh (1 voyage)".
+// The 30 minute tram/busway transfer window is from press coverage of the busway launch
+// (Medias24, 2024-03-01), not from the operator site.
+export const CASATRAMWAY_SINGLE_FARE_MAD = 8;
+export const CASATRAMWAY_TRANSFER_WINDOW_SECS = 30 * 60;
+
+// https://www.casabus.ma/titres-de-transport/tarifs/ (checked 2026-10-28). The site writes L032D,
+// the API route id is L32D. L302 and L308 are not listed there and get no fare.
+export const CASABUS_FARES_MAD: { [price: number]: readonly string[] } = {
+    50: ["L001"],
+    8: ["L32D", "L120", "L312", "L900"],
+    6: [
+        "L055", "L068", "L300", "L301", "L306", "L307", "L309", "L310",
+        "L600", "L604", "L606", "L608", "L800", "L902", "L903", "L904"
+    ],
+    5: [
+        "L005", "L006", "L007", "L09E", "L011", "L013", "L019", "L020", "L022", "L023",
+        "L031", "L033", "L038", "L039", "L040", "L043", "L050", "L051", "L056", "L060",
+        "L062", "L063", "L064", "L065", "L067", "L072", "L079", "L082", "L084", "L090",
+        "L097", "L97B", "L107", "L109", "L139", "L143", "L905", "L906", "L907"
+    ]
+};
