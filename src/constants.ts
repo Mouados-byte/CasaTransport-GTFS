@@ -21,7 +21,9 @@ export const CASABUS_API_URI = "https://api.alsaalbaida.ma/api";
 export const CASABUS_GTFS_URI = "https://storageacntcasabusonly.blob.core.windows.net/gtfs";
 export const CASABUS_UMBRACO_URI = "https://web.alsaalbaida.ma/umbraco/api";
 
-export const CALENDARIFIC_API_KEY = Deno.env.get("CALENDARIFIC_API_KEY");
+// Google's public Morocco holiday calendar, no key needed
+export const MOROCCO_HOLIDAYS_ICS_URI =
+    "https://calendar.google.com/calendar/ical/fr.ma%23holiday%40group.v.calendar.google.com/public/basic.ics";
 
 export const FEED_INFO = {
     publisherName: "SpaghettDev",

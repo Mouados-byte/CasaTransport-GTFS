@@ -27,17 +27,13 @@ jobs:
       - name: Run tests
         run: deno test --allow-all src/
 
-      - name: Write env file
-        run: |
-          echo "CALENDARIFIC_API_KEY=${{ secrets.CALENDARIFIC_API_KEY }}" > .env
-
       # A random free proxy from a public list was used here before. It changed on every run and
       # could read the traffic, so a proxy is now opt-in through the EXPORT_PROXY secret.
       - name: Run GTFS exporter
         env:
           HTTP_PROXY: ${{ secrets.EXPORT_PROXY }}
           HTTPS_PROXY: ${{ secrets.EXPORT_PROXY }}
-        run: deno run --allow-all --env-file main.ts
+        run: deno run --allow-all main.ts
 
       - name: Create zip bundles
         run: |

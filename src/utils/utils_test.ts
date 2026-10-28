@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { dropOppositeDirectionTrips, interpolateStopOffsets, secondsToTime } from "@utils/utils.ts";
+import { dropOppositeDirectionTrips, interpolateStopOffsets, parsePublicHolidays, secondsToTime } from "@utils/utils.ts";
 
 Deno.test("terminus ghost of a trip is dropped from the opposite direction", () => {
     const e = (tripId: string, stopId: string) => ({ tripId, stopId });
@@ -24,4 +24,16 @@ Deno.test("stop offsets follow distance and end at the measured duration", () =>
 Deno.test("seconds format as GTFS time past midnight", () => {
     assertEquals(secondsToTime(5 * 3600 + 77 * 60 + 20), "06:17:20");
     assertEquals(secondsToTime(25 * 3600), "25:00:00");
+});
+
+Deno.test("public holidays come from Jour férié events of the year only", () => {
+    // folded DESCRIPTION line and CRLF endings, as Google serves them
+    const ics = [
+        "BEGIN:VEVENT", "DTSTART;VALUE=DATE:20260320", "SUMMARY:Aïd al-Fitr", "DESCRIPTION:Jour férié", "END:VEVENT",
+        "BEGIN:VEVENT", "DTSTART;VALUE=DATE:20260219", "SUMMARY:Ramadan", "DESCRIPTION:Journée d'observance\\nPour", " masquer", "END:VEVENT",
+        "BEGIN:VEVENT", "DTSTART;VALUE=DATE:20251118", "SUMMARY:Fête de l'indépendance", "DESCRIPTION:Jour férié", "END:VEVENT",
+        "BEGIN:VEVENT", "DTSTART;VALUE=DATE:20260101", "SUMMARY:Jour de l'an", "DESCRIPTION:Jour férié", "END:VEVENT"
+    ].join("\r\n");
+
+    assertEquals(parsePublicHolidays(ics, 2026), ["20260101", "20260320"]);
 });

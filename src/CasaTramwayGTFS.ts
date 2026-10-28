@@ -1,7 +1,7 @@
 import { RateLimitConfig, RateLimitedFetcher } from "@utils/RatelimitedFetcher.ts";
 import Line, { ILineWithStopTimes } from "@tram-types/line.ts";
 import type { GtfsExportBundle } from "@local-types/types.ts";
-import { HolidaysSundaysCache } from "@local-types/calendarific.ts";
+import { HolidaysSundaysCache } from "@local-types/holidays.ts";
 import {
     GtfsData, StopPoint, CalendarPerimeter, DeparturesOptions,
     ComputedTime, Destination, DiscoveryResponse, LineNumber,

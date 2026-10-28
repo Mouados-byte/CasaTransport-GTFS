@@ -1,12 +1,11 @@
 import { eachWeekendOfYear } from "date-fns";
 import {
     CACHE_DIRECTORY,
-    CALENDARIFIC_API_KEY,
+    MOROCCO_HOLIDAYS_ICS_URI,
     CASATRAMWAY_ROUTE_PLANNER_WIDGET_URI
 } from "../constants.ts";
-import { ICalendarificResponse, HolidaysSundaysCache } from "@local-types/calendarific.ts";
+import { HolidaysSundaysCache } from "@local-types/holidays.ts";
 import { GtfsDate, TransformKeysUncapitalize } from "@local-types/types.ts";
-import logger from "./log.ts";
 
 export const dateToCasaTramwayDate = (date: Date): string => {
     return date.toISOString().split('T')[0];
@@ -154,24 +153,27 @@ export const fromLowerKeys = <T extends Record<string, any>>(obj: TransformKeysU
     return result;
 }
 
+/**
+ * Public holidays of a year from an iCalendar file. Google marks them "Jour férié" in DESCRIPTION,
+ * observances such as Ramadan or the clock change are "Journée d'observance" and are skipped.
+ */
+export const parsePublicHolidays = (ics: string, year: number): GtfsDate[] => {
+    const unfolded = ics.replace(/\r?\n[ \t]/g, "");
+    const dates = unfolded.split("BEGIN:VEVENT").slice(1)
+        .filter(event => /^DESCRIPTION:Jour férié/m.test(event))
+        .map(event => event.match(/^DTSTART;VALUE=DATE:(\d{8})/m)?.[1])
+        .filter((date): date is string => date?.startsWith(String(year)) ?? false);
+
+    return [...new Set(dates)].sort() as GtfsDate[];
+}
+
 export const getMoroccanHolidays = async (year: number): Promise<GtfsDate[]> => {
-    if (!CALENDARIFIC_API_KEY) {
-        logger.warn("CALENDARIFIC_API_KEY is not set, exporting without national holidays");
-        return [];
-    }
-
-    const url = `https://calendarific.com/api/v2/holidays?api_key=${CALENDARIFIC_API_KEY}&country=MA&year=${year}`;
-
-    const response = await fetch(url);
-    const data: ICalendarificResponse = await response.json();
-
+    const response = await fetch(MOROCCO_HOLIDAYS_ICS_URI);
     if (!response.ok) {
-        throw new Error(`Failed to fetch holidays: ${response.status} ${data.meta.error_detail!}`);
+        throw new Error(`Failed to fetch holidays: ${response.status} ${response.statusText}`);
     }
 
-    return data.response.holidays!
-        .filter(holiday => holiday.type.includes("National holiday"))
-        .map(holiday => toGtfsDate(holiday.date.iso));
+    return parsePublicHolidays(await response.text(), year);
 }
 
 export const getAllSundays = (year: number): GtfsDate[] => {
@@ -249,10 +251,7 @@ export const getHolidaysSundaysCache = async (): Promise<HolidaysSundaysCache> =
             sundays: filteredSundays.sort()
         });
 
-        // an empty list means no API key, so ask again next run instead of caching it
-        if (holidays.length) {
-            await Deno.writeTextFile(filepath, JSON.stringify(allHolidays, null, 4));
-        }
+        await Deno.writeTextFile(filepath, JSON.stringify(allHolidays, null, 4));
     }
 
     return allHolidays;
