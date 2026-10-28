@@ -24,7 +24,8 @@ import {
     deduplicateByDeepEquality,
     deduplicateByKey,
     dropOppositeDirectionTrips,
-    getClosestSaturday, getClosestSunday, getClosestWeekday
+    getClosestSaturday, getClosestSunday, getClosestWeekday,
+    getHolidaysSundaysCache
 } from "@utils/utils.ts";
 import { fixCBStopName } from "@utils/CBStopNameFix.ts";
 import { Cache } from "@utils/CacheDecorator.ts";
@@ -312,10 +313,11 @@ export default class CasaBusGTFS extends GTFSExporter {
         const busRoutes = await this.getBusRoutesBothDirs();
         const tasks: Promise<void>[] = [];
 
+        const { holidays } = await getHolidaysSundaysCache();
         const serviceSuffixes = ["WEEKDAY", "SATURDAY", "SUNDAY"] as const;
         const timetableToDate = {
-            WEEKDAY: getClosestWeekday(),
-            SATURDAY: getClosestSaturday(),
+            WEEKDAY: getClosestWeekday(undefined, holidays),
+            SATURDAY: getClosestSaturday(undefined, holidays),
             SUNDAY: getClosestSunday()
         } as const;
 
@@ -626,6 +628,20 @@ export default class CasaBusGTFS extends GTFSExporter {
         )));
     }
 
+    // ponytail: assumes the Sunday timetable runs on national holidays, as on the tramway
+    override async getGTFSCalendarDates(_network: string = ""): Promise<string> {
+        const { holidays } = await getHolidaysSundaysCache();
+
+        return this.toCsv(
+            ["service_id", "date", "exception_type"] as const,
+            holidays.flatMap(date => [
+                ["SVC_WEEKDAY", date, 2],
+                ["SVC_SATURDAY", date, 2],
+                ["SVC_SUNDAY", date, 1]
+            ])
+        );
+    }
+
     async getGTFSFareAttributes(_network: string = ""): Promise<string> {
         // ponytail: payment_method 0 (on board) and no free transfers are assumptions,
         // casabus.ma only publishes the per-line price
@@ -686,7 +702,7 @@ export default class CasaBusGTFS extends GTFSExporter {
         const [
             agency, routes, trips,
             shapes, stopTimes, stops,
-            calendar, feedInfo,
+            calendar, calendarDates, feedInfo,
             fareAttributes, fareRules
         ] = await Promise.all([
             this.exportLogWrapper("agency.txt", this.getGTFSAgency, network),
@@ -696,6 +712,7 @@ export default class CasaBusGTFS extends GTFSExporter {
             this.exportLogWrapper("stop_times.txt", this.getGTFSStopTimes, network),
             this.exportLogWrapper("stops.txt", this.getGTFSStops, network),
             this.exportLogWrapper("calendar.txt", this.getGTFSCalendar, network),
+            this.exportLogWrapper("calendar_dates.txt", this.getGTFSCalendarDates, network),
             this.exportLogWrapper("feed_info.txt", this.getGTFSFeedInfo, network),
             this.exportLogWrapper("fare_attributes.txt", this.getGTFSFareAttributes, network),
             this.exportLogWrapper("fare_rules.txt", this.getGTFSFareRules, network)
@@ -709,6 +726,7 @@ export default class CasaBusGTFS extends GTFSExporter {
             "stop_times.txt": stopTimes,
             "stops.txt": stops,
             "calendar.txt": calendar,
+            "calendar_dates.txt": calendarDates,
             "feed_info.txt": feedInfo,
             "fare_attributes.txt": fareAttributes,
             "fare_rules.txt": fareRules
